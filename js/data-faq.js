@@ -54,7 +54,7 @@ export const FAQ = [
  {
   "n": 11,
   "q": "What if I am in the risk-score group? Do I miss out?",
-  "a": "No. The risk-score approach is what doctors around the world currently recommend. You get the same health check, the same lifestyle advice, a cholesterol tablet if your score recommends it, the same free medicines, and the same follow-up. We do not know that the scan group does better — if we did, we would not be doing the study. Both groups are equally important, and the study needs people in the risk-score group to stay in it for the results to mean anything."
+  "a": "No. The risk-score approach is what doctors around the world currently recommend. You get the same health check, the same lifestyle advice, a cholesterol tablet prescribed if your score recommends it, and the same follow-up. We do not know that the scan group does better — if we did, we would not be doing the study. Both groups are equally important, and the study needs people in the risk-score group to stay in it for the results to mean anything."
  },
  {
   "n": 12,
@@ -63,8 +63,8 @@ export const FAQ = [
  },
  {
   "n": 13,
-  "q": "Which medicines might I be asked to take? Are they free?",
-  "a": "Depending on your result, the study plan may recommend a cholesterol-lowering tablet (a statin, such as atorvastatin) and, for some people in the scan group whose scan shows plaque, low-dose aspirin (75 mg). These are well-known, approved medicines used every day in India. Study-recommended medicines are provided without charge for as long as you are in the study, usually dispensed every three months. You can decline any medicine and still remain in the study."
+  "q": "Which medicines might I be asked to take? Who pays for them?",
+  "a": "Depending on your result, the study plan may recommend a cholesterol-lowering tablet (a statin, such as atorvastatin or rosuvastatin) and, for some people in the scan group whose scan shows plaque, low-dose aspirin (75 mg; clopidogrel if aspirin cannot be used). These are well-known, approved generic medicines used every day in India. The study doctor prescribes them and you obtain them through the hospital pharmacy. The study does not pay for the medicines; the study team can tell you what to expect at your hospital. You can decline any medicine and still remain in the study."
  },
  {
   "n": 14,
@@ -79,7 +79,7 @@ export const FAQ = [
  {
   "n": 16,
   "q": "What will it cost me? Will I be paid?",
-  "a": "Nothing. Study tests, the scan (if allocated), study visits and study medicines are provided without charge. You are not paid for taking part. Reasonable travel costs for study visits are reimbursed at a rate approved by the Ethics Committee (₹[300] per hospital visit, or actual costs where higher)."
+  "a": "The study tests, the scan (if allocated) and study visits are provided without charge. The medicines the study recommends are prescribed to you and you obtain them through the hospital pharmacy; the study does not pay for them. You are not paid for taking part. Reasonable travel costs for study visits are reimbursed at a rate approved by the Ethics Committee (₹[300] per hospital visit, or actual costs where higher)."
  },
  {
   "n": 17,
@@ -89,7 +89,7 @@ export const FAQ = [
  {
   "n": 18,
   "q": "Can I leave the study?",
-  "a": "Yes, at any time, without giving a reason, and your usual medical care will not be affected. Just tell the study team. You can also choose to stop study medicines or visits but allow us to keep in touch, or to let us check hospital records for your health at the end of the study — you decide."
+  "a": "Yes, at any time, without giving a reason, and your usual medical care will not be affected. Just tell the study team. You can also choose to stop the recommended medicines or the study visits but allow us to keep in touch, or to let us check hospital records for your health at the end of the study — you decide."
  },
  {
   "n": 19,
@@ -99,7 +99,7 @@ export const FAQ = [
  {
   "n": 20,
   "q": "What if I am harmed because of the study?",
-  "a": "If you have a medical problem caused by a study procedure or a study medicine, you will receive free medical care at the study hospital for as long as needed. You will be compensated according to the guidelines of the Indian Council of Medical Research, as decided by the Ethics Committee. The study has insurance covering all participants."
+  "a": "If you have a medical problem caused by a study procedure or a medicine recommended by the study, you will receive free medical care at the study hospital for as long as needed. You will be compensated according to the guidelines of the Indian Council of Medical Research, as decided by the Ethics Committee. The study has insurance covering all participants."
  },
  {
   "n": 21,
