@@ -1,5 +1,5 @@
 /* Offline shell. Caches app files only — never any personal data. Bump CACHE when files change. */
-const CACHE = 'hriday-eoi-v0.1.1';
+const CACHE = 'hriday-eoi-v0.1.2';
 const ASSETS = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',
   'js/app.js', 'js/a11y.js', 'js/api.js', 'js/config.js', 'js/content.js', 'js/logic.js',
