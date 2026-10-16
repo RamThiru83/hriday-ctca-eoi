@@ -1,5 +1,5 @@
-// Generated from the HRIDAY-CT-OUT-001/002 v0.1 source documents (English masters). Do not edit by hand —
-// change the source document and regenerate, so that wording stays identical to the EC submission.
+// Privacy notice (English). v0.2.0: personal-data list and age range updated to the HRIDAY-CTCA decisions fact sheet of 16 Oct 2026.
+// Otherwise as the OUT-001 v0.1 master. Reworded lines are marked "// UI" and need Ethics Committee / legal review.
 export const PRIVACY = {
  "title": "HRIDAY-CTCA research study — Privacy notice for the self-screening portal, mobile application and helpline",
  "sections": [
@@ -13,11 +13,11 @@ export const PRIVACY = {
   },
   {
    "h": "What personal data do we collect?",
-   "t": "(1) Your answers to the eligibility questions: your sex, age, risk factors, symptoms, past heart tests, kidney disease, contrast allergy and, for women, pregnancy or breastfeeding. (2) If you ask us to contact you: your name; your mobile number, checked with a one-time code; any other number or e-mail you give; your PIN code or town; your preferred hospital, language and call times; how you heard about the study; and any first-visit slot you choose. (3) Technical data needed to run the service safely, such as the time of your visit and the type of device, and a campaign code that shows which poster or message brought you here. We do not use advertising cookies or trackers. We do not collect your location from your device."
+   "t": "(1) Your answers to the pre-screening questions: how you heard about the study, your age, whether a doctor has told you that you have heart disease or blocked arteries, and which common health problems (risk factors) apply to you. (2) If you give us your contact details: your name; your mobile number, checked with a one-time code; your city or town; your preferred hospital and language; your preferred time to call, if you give one; and whether you would like to book a screening appointment. (3) Technical data needed to run the service safely, such as the time of your visit and the type of device, and a campaign code that shows which poster or message brought you here. We do not use advertising cookies or trackers. We do not collect your location from your device." // UI
   },
   {
    "h": "Why do we collect it?",
-   "t": "To check, from your answers, whether you may be able to take part. To contact you, if you ask us to, to explain the study and arrange a visit. To send you appointment messages, if you agree. To learn which ways of telling people about the study work best, using anonymous counts. And to keep records that show the study was run properly."
+   "t": "To check, from your answers, whether you may be able to take part. To contact you, if you give us your details, to explain the study and arrange a visit. To learn which ways of telling people about the study work best, using anonymous counts. And to keep records that show the study was run properly." // UI
   },
   {
    "h": "On what basis?",
@@ -25,7 +25,7 @@ export const PRIVACY = {
   },
   {
    "h": "",
-   "t": "If you do not ask to be contacted, we do not save your name or any contact details. We keep only anonymous counts of answers. These cannot identify you."
+   "t": "If you do not give us your contact details, we do not save your name or any contact details. We keep only anonymous counts of answers. These cannot identify you." // UI
   },
   {
    "h": "Who can see your data?",
@@ -49,7 +49,7 @@ export const PRIVACY = {
   },
   {
    "h": "Children",
-   "t": "This service is for adults aged 18 and over. The study enrols only adults aged 40 to 70."
+   "t": "This service is for adults aged 18 and over. The study enrols only adults aged 40 or over." // UI
   },
   {
    "h": "Changes",

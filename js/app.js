@@ -6,7 +6,7 @@ import { FAQ } from './data-faq.js';
 import { PRIVACY } from './data-privacy.js';
 import { STUDY } from './data-study.js';
 import {
-  classify, visibleSteps, ageSexOk, toggleRf, toggleCvd, firstUnanswered, OUTCOME, REASON,
+  classify, visibleSteps, ageValid, toggleRf, firstUnanswered, OUTCOME, REASON, REVIEW_REASON,
 } from './logic.js';
 import { submitEOI, sendOtp, verifyOtp } from './api.js';
 import { prefs, loadPrefs, setPref, speak, stopSpeech, speechSupported } from './a11y.js';
@@ -54,7 +54,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 /* ================================================================== state */
 function freshState() {
   return {
-    answers: {}, ackRandom: false, contactConsent: false, privacyAck: false, contact: {}, result: null, ref: null, payload: null,
+    answers: {}, consent: false, contact: {}, result: null, ref: null, payload: null,
     campaign: (new URLSearchParams(location.search).get('c') || '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 40),
     started: false, submitting: false,
   };
@@ -89,9 +89,9 @@ function buildNav() {
     ['/help', UI.nav.help, 'M5 13v-1a7 7 0 0 1 14 0v1M5 13h2v5H5zM17 13h2v5h-2zM19 18c0 2-2 3-5 3'],
   ];
   for (const [path, label, d, short] of items) {
-    nav.append(h('a', { href: '#' + path, 'data-path': path, class: 'tab', 'aria-label': short ? label : null },
+    nav.append(h('a', { href: '#' + path, 'data-path': path, class: 'tab' },
       h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', focusable: 'false' }, h('path', { d })),
-      h('span', null, h('span', { class: 'full' }, label), short ? h('span', { class: 'short', 'aria-hidden': 'true' }, short) : null)));
+      h('span', null, h('span', { class: 'full' }, label), short ? h('span', { class: 'short' }, short) : null)));
   }
 }
 
@@ -368,9 +368,10 @@ function reviewerNotes() {
   return h('div', null,
     h('p', null, 'Source: ' + CONFIG.SOURCE_DOCS + '. App version ' + CONFIG.APP_VERSION + '.'),
     h('ul', null,
-      li('Wording of the questions, messages E1–E7 and the privacy notice is copied from OUT-002; the study text and FAQ from OUT-001.'),
+      li('The questions, answer options and outcome messages follow the HRIDAY-CTCA fact sheet of 16 October 2026 (common pre-screening question set). The study text and FAQ were updated to the same sheet; privacy and consent wording is from OUT-001/002 v0.1.'),
+      li('Wording that is not in the fact sheet is marked “// UI” in the source files.'),
       li('Every item still to be confirmed is shown as a bracketed placeholder with a dashed outline.'),
-      li('Switch on “Reviewer mode” in Settings to see, on each outcome screen, how the answers were classified; and on the final screen, the record that would be sent.'),
+      li('Switch on “Reviewer mode” in Settings to see, on each outcome screen, how the answers were classified (REDCap variable names and codes); and on the final screen, the record that would be sent.'),
       li('Nothing is saved or sent in this build. One-time-code demonstration code: ' + CONFIG.DEMO_OTP + '.')));
 }
 
@@ -380,8 +381,9 @@ on('/check', () => {
   const el = h('section', { class: 'page prose' },
     h('h1', null, INTRO.title),
     INTRO.paras.map((p) => h('p', { class: 'lead-p' }, p)),
+    h('div', { class: 'emergency', role: 'note' }, h('strong', { class: 'tag' }, 'Important'), h('p', null, tpl(INTRO.emergency))),
     h('div', { class: 'stack' },
-      btn(UI.start, { href: '#/check/q/sex', big: true, id: 'start-btn' }),
+      btn(UI.start, { href: '#/check/q/channel', big: true, id: 'start-btn' }),
       btn(UI.read_first, { href: '#/about', kind: 'secondary' }),
       h('a', { class: 'textlink', href: '#/privacy' }, UI.privacy)));
   return { title: INTRO.title, el };
@@ -401,9 +403,9 @@ on('/check/q', (id) => {
   const q = QUESTIONS[id];
   if (!q) return notFound();
   // Guard: need earlier answers (no reload persistence by design).
-  if (id !== 'sex' && S.answers.eoi_sex == null) { go('/check'); return false; }
+  if (id !== 'channel' && S.answers.ps_channel == null) { go('/check'); return false; }
   const steps = visibleSteps(S.answers);
-  if (id !== 'sex' && !steps.includes(id)) { go('/check'); return false; }
+  if (id !== 'channel' && !steps.includes(id)) { go('/check'); return false; }
   const { n, total } = stepProgress(id);
   const pct = Math.round(((n - 1) / total) * 100);
   const idx = steps.indexOf(id);
@@ -420,16 +422,15 @@ on('/check/q', (id) => {
 
   if (q.type === 'age') {
     const input = h('input', {
-      id: 'age', name: 'age', type: 'text', inputmode: 'numeric', autocomplete: 'off', maxlength: '2', pattern: '[0-9]*',
-      'aria-describedby': 'age-hint q-error', class: 'bigfield', value: S.answers.eoi_age != null ? String(S.answers.eoi_age) : '',
+      id: 'age', name: 'age', type: 'text', inputmode: 'numeric', autocomplete: 'off', maxlength: '3', pattern: '[0-9]*',
+      'aria-describedby': 'age-hint q-error', class: 'bigfield', value: S.answers.ps_age != null ? String(S.answers.ps_age) : '',
     });
     fieldNode = h('div', { class: 'field' }, h('p', { id: 'age-hint', class: 'hint' }, q.hint), h('label', { for: 'age', class: 'sr-only' }, q.text), input);
     getValue = () => {
       const v = input.value.trim();
       input.removeAttribute('aria-invalid');
-      if (!/^\d{1,2}$/.test(v)) { input.setAttribute('aria-invalid', 'true'); return { error: UI.age_error, focus: input }; }
-      const num = parseInt(v, 10);
-      if (num < 18 || num > 99) { input.setAttribute('aria-invalid', 'true'); return { error: UI.age_error, focus: input }; }
+      const num = /^\d{1,3}$/.test(v) ? parseInt(v, 10) : NaN;
+      if (!ageValid(num)) { input.setAttribute('aria-invalid', 'true'); return { error: UI.age_error, focus: input }; }
       return { value: num };
     };
   } else if (q.type === 'single') {
@@ -446,16 +447,16 @@ on('/check/q', (id) => {
     };
   } else { // multi
     let sel = Array.isArray(S.answers[q.field]) ? [...S.answers[q.field]] : [];
-    const toggle = q.field === 'eoi_rf' ? toggleRf : toggleCvd;
     const boxes = q.options.map((o) => h('input', {
       type: 'checkbox', value: String(o.v), checked: sel.includes(o.v), 'aria-describedby': 'q-error',
       onchange: () => {
-        const before = sel.length;
-        sel = toggle(sel, o.v);
+        const before = sel;
+        sel = toggleRf(sel, o.v);
         boxes.forEach((b, i) => { b.checked = sel.includes(q.options[i].v); });
         errBox.textContent = '';
         note.textContent = '';
-        if (before > 1 && sel.length === 1 && (o.v === 7 || o.v === 8 || o.v === 9)) setTimeout(() => { note.textContent = UI.others_cleared; }, 50);
+        // "None of these" (8) is exclusive: tell the person when choosing it, or choosing another answer, cleared something.
+        if (before.some((c) => c !== o.v && !sel.includes(c))) setTimeout(() => { note.textContent = UI.others_cleared; }, 50);
       },
     }));
     fieldNode = h('div', { class: 'options', role: 'group', 'aria-labelledby': legendId },
@@ -468,10 +469,7 @@ on('/check/q', (id) => {
     if (r.error) { errBox.textContent = r.error; r.focus && r.focus.focus(); return; }
     errBox.textContent = '';
     S.answers[q.field] = r.value;
-    if (id === 'age') {
-      if (!ageSexOk(S.answers.eoi_sex, S.answers.eoi_age)) { pruneAnswers(); go('/check/result'); return; }
-    }
-    pruneAnswers();
+    pruneAnswers(); // under 40, or Yes to known heart disease: later questions drop out and the result follows
     const st = visibleSteps(S.answers);
     const nx = st[st.indexOf(id) + 1];
     if (nx) go('/check/q/' + nx); else go('/check/result');
@@ -496,152 +494,105 @@ on('/check/q', (id) => {
 });
 
 /* ---- result ---- */
+const NE_KEY = { [REASON.AGE]: 'age', [REASON.KNOWN_DISEASE]: 'known_disease', [REASON.NO_RISK_FACTOR]: 'no_risk_factor' };
+
 on('/check/result', () => {
   const missing = firstUnanswered(S.answers);
-  if (missing) { go(S.answers.eoi_sex == null ? '/check' : '/check/q/' + missing); return false; }
+  if (missing) { go(S.answers.ps_channel == null ? '/check' : '/check/q/' + missing); return false; }
   const r = classify(S.answers);
   S.result = r;
   const el = h('section', { class: 'page prose result' });
-  const m = r.message;
-  const msg = MESSAGES[m];
   const kids = [];
+  const goOn = r.outcome === OUTCOME.ELIGIBLE || r.outcome === OUTCOME.REVIEW;
 
-  if (m === 'E1') {
+  if (goOn) {
+    const msg = r.outcome === OUTCOME.ELIGIBLE ? MESSAGES.eligible : MESSAGES.review;
     kids.push(h('h1', null, msg.title), msg.paras.map((p) => h('p', null, p)));
-    kids.push(h('div', { class: 'stack' }, btn(UI.continue, { big: true, onclick: () => go('/check/ack') })));
-  } else if (m === 'E5') {
-    kids.push(h('h1', null, msg.title), msg.paras.map((p) => h('p', null, p)));
-    kids.push(h('div', { class: 'stack' }, btn(UI.continue, { big: true, onclick: () => go('/check/ack') }), btn(UI.no_thanks, { kind: 'secondary', onclick: () => { S.contactConsent = false; go('/check/end'); } })));
-  } else if (m === 'E2') {
-    kids.push(h('h1', null, msg.title), msg.paras.map((p) => h('p', null, p)));
-    if (r.flags.womanUnder50) kids.push(h('p', null, msg.women));
-    kids.push(h('p', null, msg.more), h('ul', null,
-      h('li', null, h('a', { href: '#/about' }, UI.about_title)),
-      h('li', null, 'Helpline: ', phoneNode(CONFIG.HELPLINE))),
-    shareButton(), exitButtons());
-  } else if (m === 'E3') {
-    kids.push(h('h1', null, msg.title), msg.paras.map((p) => h('p', null, p)),
-      h('div', { class: 'emergency', role: 'note' }, h('strong', { class: 'tag' }, 'Important'), h('p', null, tpl(msg.emergency))),
-      h('p', null, msg.closing), exitButtons());
-  } else { // E4
-    kids.push(h('h1', null, msg.title), h('p', null, msg.lead), h('p', null, msg.reasons[r.e4]), h('p', null, msg.closing), exitButtons());
+    kids.push(h('div', { class: 'stack' },
+      btn(UI.continue, { big: true, onclick: () => go('/check/notice') }),
+      btn(UI.no_thanks, { kind: 'secondary', onclick: () => { S.consent = false; go('/check/end'); } })));
+  } else {
+    const msg = MESSAGES.not_eligible;
+    kids.push(h('h1', null, msg.title), h('p', null, msg.reasons[NE_KEY[r.reasons[0]]]), h('p', null, msg.closing));
+    if (r.reasons[0] === REASON.AGE) {
+      kids.push(h('p', null, msg.more), h('ul', null,
+        h('li', null, h('a', { href: '#/about' }, UI.about_title)),
+        h('li', null, 'Helpline: ', phoneNode(CONFIG.HELPLINE))), shareButton());
+    }
+    kids.push(exitButtons());
   }
   append(el, kids);
-  if (m !== 'E1' && m !== 'E5') {
-    const lb = listenButton(() => readable(el));
-    if (lb) el.insertBefore(lb, $('h1', el).nextSibling);
-  } else {
-    const lb = listenButton(() => readable(el));
-    if (lb) el.insertBefore(lb, $('h1', el).nextSibling);
-    el.append(leaveLink());
-  }
+  const lb = listenButton(() => readable(el));
+  if (lb) el.insertBefore(lb, $('h1', el).nextSibling);
+  if (goOn) el.append(leaveLink());
   if (prefs.review) el.append(reviewPanel(r));
-  return { title: 'Your answers', el, terminal: !(m === 'E1' || m === 'E5') };
+  return { title: 'Your answers', el, terminal: !goOn };
 });
 
 function exitButtons() {
   return h('div', { class: 'stack' }, btn(UI.go_home, { href: '#/', big: true }), btn(UI.restart, { kind: 'secondary', href: '#/check' }));
 }
 
-const REASON_NAMES = Object.fromEntries(Object.entries(REASON).map(([k, v]) => [v, k]));
+const nameOf = (obj) => Object.fromEntries(Object.entries(obj).map(([k, v]) => [v, k]));
+const REASON_NAMES = nameOf(REASON);
+const REVIEW_NAMES = nameOf(REVIEW_REASON);
 function reviewPanel(r) {
-  const outName = { 1: 'POTENTIALLY ELIGIBLE', 2: 'NOT ELIGIBLE', 3: 'CLINICIAN REVIEW' }[r.outcome];
+  const outName = { 1: 'POTENTIALLY ELIGIBLE', 2: 'NOT ELIGIBLE', 3: 'COORDINATOR CHECK NEEDED' }[r.outcome];
   return h('aside', { class: 'card review', 'aria-label': UI.rev_outcome },
     h('h2', null, UI.rev_outcome),
     h('dl', null,
-      h('dt', null, 'Outcome'), h('dd', null, outName + ' (eoi_outcome = ' + r.outcome + ')'),
-      h('dt', null, 'Message shown'), h('dd', null, r.message + (r.e4 ? ' · ' + r.e4 : '')),
-      h('dt', null, 'Not-eligible reasons'), h('dd', null, r.reasons.map((x) => REASON_NAMES[x]).join(', ') || '—'),
-      h('dt', null, 'Review reasons'), h('dd', null, r.review.map((x) => REASON_NAMES[x]).join(', ') || '—'),
-      h('dt', null, 'Flags'), h('dd', null, 'age70=' + r.flags.age70 + ', womanUnder50=' + r.flags.womanUnder50)),
+      h('dt', null, 'Outcome'), h('dd', null, outName + ' (ps_outcome = ' + r.outcome + ')'),
+      h('dt', null, 'ps_age_ok'), h('dd', null, String(r.ps_age_ok)),
+      h('dt', null, 'Not-eligible reasons'), h('dd', null, r.reasons.map((x) => x + ' ' + REASON_NAMES[x]).join(', ') || '—'),
+      h('dt', null, 'Check-needed reasons'), h('dd', null, r.review.map((x) => REVIEW_NAMES[x]).join(', ') || '—'),
+      h('dt', null, 'Answers (ps_channel never affects the outcome)')),
     h('pre', null, JSON.stringify(S.answers)));
 }
 
-/* ---- acknowledgement ---- */
-/** True only if every visible question is answered and the answers still classify as eligible or review. */
+/* ---- disclaimer, consent tick and privacy notice (outcomes 1 and 3 only) ---- */
+/** True only if every visible question is answered and the answers classify as potentially eligible or check needed. */
 function eligibleToContinue() {
   if (firstUnanswered(S.answers)) return false;
   const r = classify(S.answers);
   return r.outcome === OUTCOME.ELIGIBLE || r.outcome === OUTCOME.REVIEW;
 }
 
-on('/check/ack', () => {
-  if (!eligibleToContinue()) { go('/check'); return false; }
-  const cb = h('input', { type: 'checkbox', id: 'ack1', checked: S.ackRandom, 'aria-describedby': 'ack-error' });
-  const err = h('p', { class: 'error', id: 'ack-error', role: 'alert' });
-  const el = h('form', { class: 'page prose', novalidate: true, onsubmit: (e) => {
-    e.preventDefault();
-    if (!cb.checked) { err.textContent = UI.tick_to_go_on; cb.focus(); return; }
-    S.ackRandom = true; go('/check/contact-ask');
-  } },
-  h('h1', null, ACK.a1_lead),
-  h('p', { class: 'lead-p' }, ACK.a1_text),
-  listenButton(() => ACK.a1_lead + ' ' + ACK.a1_text),
-  h('label', { class: 'opt opt-check single' }, cb, h('span', { class: 'mark', 'aria-hidden': 'true' }), h('span', { class: 'txt' }, ACK.a1_check)),
-  err,
-  h('div', { class: 'actions' }, btn(UI.back, { kind: 'secondary', onclick: () => go('/check/result') }), h('button', { type: 'submit', class: 'btn btn-primary' }, UI.next)),
-  leaveLink());
-  return { title: ACK.a1_lead, el };
-});
-
-on('/check/contact-ask', () => {
-  if (!S.ackRandom || !eligibleToContinue()) { go('/check'); return false; }
-  const err = h('p', { class: 'error', id: 'ask-error', role: 'alert' });
-  const cur = S.contactAsked ? (S.contactConsent ? 1 : 0) : null;
-  const group = h('div', { class: 'options', role: 'radiogroup', 'aria-labelledby': 'ask-q' },
-    ACK.a2_opts.map((o) => h('label', { class: 'opt' }, h('input', { type: 'radio', name: 'ask', value: String(o.v), checked: cur === o.v }),
-      h('span', { class: 'mark', 'aria-hidden': 'true' }), h('span', { class: 'txt' }, o.label))));
-  const el = h('form', { class: 'page prose', novalidate: true, onsubmit: (e) => {
-    e.preventDefault();
-    const c = group.querySelector('input:checked');
-    if (!c) { err.textContent = UI.choose_answer; group.querySelector('input').focus(); return; }
-    S.contactAsked = true;
-    S.contactConsent = c.value === '1';
-    go(S.contactConsent ? '/check/notice' : '/check/end');
-  } },
-  h('h1', { id: 'ask-q' }, ACK.a2_text), listenButton(() => ACK.a2_text), group, err,
-  h('div', { class: 'actions' }, btn(UI.back, { kind: 'secondary', onclick: () => go('/check/ack') }), h('button', { type: 'submit', class: 'btn btn-primary' }, UI.next)),
-  leaveLink());
-  return { title: ACK.a2_text, el };
-});
-
 on('/check/end', () => {
   if (!eligibleToContinue()) { go('/check'); return false; }
-  const msg = MESSAGES.E6;
+  const msg = MESSAGES.end;
   const el = h('section', { class: 'page prose' }, h('h1', null, msg.title), msg.paras.map((p) => para(p)), exitButtons());
   return { title: msg.title, el, terminal: true };
 });
 
-/* ---- privacy notice and consent (A3) ---- */
 on('/check/notice', () => {
-  if (!S.contactConsent || !eligibleToContinue()) { go('/check'); return false; }
-  const cb = h('input', { type: 'checkbox', id: 'priv', checked: S.privacyAck, 'aria-describedby': 'priv-error' });
+  if (!eligibleToContinue()) { go('/check'); return false; }
+  const cb = h('input', { type: 'checkbox', id: 'priv', checked: S.consent, 'aria-describedby': 'priv-error' });
   const err = h('p', { class: 'error', id: 'priv-error', role: 'alert' });
   const full = h('details', { class: 'inline-details' }, h('summary', null, ACK.a3_read_full),
     PRIVACY.sections.map((s) => h('div', null, s.h ? h('h3', null, s.h) : null, h('p', null, tplBrackets(s.t)))));
   const el = h('form', { class: 'page prose', novalidate: true, onsubmit: (e) => {
     e.preventDefault();
     if (!cb.checked) { err.textContent = UI.tick_to_go_on; cb.focus(); return; }
-    S.privacyAck = true; go('/check/contact/1');
+    S.consent = true; go('/check/contact/1');
   } },
   h('h1', null, ACK.a3_title),
+  h('p', { class: 'callout' }, ACK.disclaimer),
   h('div', { class: 'card' }, h('p', null, tpl(ACK.a3_short))),
   full,
   h('label', { class: 'opt opt-check single' }, cb, h('span', { class: 'mark', 'aria-hidden': 'true' }), h('span', { class: 'txt' }, ACK.a3_check)),
   err,
-  h('div', { class: 'actions' }, btn(UI.back, { kind: 'secondary', onclick: () => go('/check/contact-ask') }), h('button', { type: 'submit', class: 'btn btn-primary' }, UI.next)),
+  h('div', { class: 'actions' }, btn(UI.back, { kind: 'secondary', onclick: () => go('/check/result') }), h('button', { type: 'submit', class: 'btn btn-primary' }, UI.next)),
   leaveLink());
-  const lb = listenButton(() => plain(ACK.a3_title + '. ' + ACK.a3_short));
+  const lb = listenButton(() => plain(ACK.a3_title + '. ' + ACK.disclaimer + ' ' + ACK.a3_short));
   if (lb) el.insertBefore(lb, el.children[1]);
   return { title: ACK.a3_title, el };
 });
 
-/* ---- contact details C1–C11 in five short screens ---- */
-const CONTACT_STEPS = 5;
+/* ---- contact details in three short screens ---- */
+const CONTACT_STEPS = 3;
 /** Accepts "98765 43210", "+91 98765 43210", "09876543210" and returns the 10 digits (or the cleaned text if it cannot). */
 const normMobile = (v) => { let d = String(v).replace(/[\s\-().]/g, ''); if (d.startsWith('+91')) d = d.slice(3); else if (d.startsWith('91') && d.length === 12) d = d.slice(2); else if (d.startsWith('0') && d.length === 11) d = d.slice(1); return d; };
 const MOBILE_OK = (v) => /^\d{10}$/.test(v) && Number(v) >= 6000000000 && Number(v) <= 9999999999;
-const EMAIL_OK = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
 function field(id, label, input, { hint } = {}) {
   input.setAttribute('aria-describedby', (hint ? id + '-hint ' : '') + id + '-err');
@@ -652,36 +603,10 @@ function field(id, label, input, { hint } = {}) {
     h('p', { class: 'error', id: id + '-err', role: 'alert' }));
 }
 function setErr(id, msg) { const e = $('#' + id + '-err'); if (e) e.textContent = msg || ''; const i = $('#' + id); if (i) { if (msg) i.setAttribute('aria-invalid', 'true'); else i.removeAttribute('aria-invalid'); } }
-function radioGroup(name, labelId, options, current) {
-  return h('div', { class: 'options', role: 'radiogroup', 'aria-labelledby': labelId },
-    options.map((o) => h('label', { class: 'opt' }, h('input', { type: 'radio', name, value: String(o.v), checked: current !== undefined && String(current) === String(o.v) }),
-      h('span', { class: 'mark', 'aria-hidden': 'true' }), h('span', { class: 'txt' }, o.label))));
-}
-function checkGroup(labelId, options, current = []) {
-  return h('div', { class: 'options', role: 'group', 'aria-labelledby': labelId },
-    options.map((o) => h('label', { class: 'opt opt-check' }, h('input', { type: 'checkbox', value: String(o.v), checked: current.includes(o.v) }),
-      h('span', { class: 'mark', 'aria-hidden': 'true' }), h('span', { class: 'txt' }, o.label))));
-}
-
-function demoSlots() {
-  const out = []; const d = new Date(); d.setHours(0, 0, 0, 0);
-  while (out.length < 12) {
-    d.setDate(d.getDate() + 1);
-    const wd = d.getDay();
-    if (wd === 0) continue;
-    for (const hm of ['10:00', '11:30']) {
-      const pad = (n) => String(n).padStart(2, '0');
-      const iso = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + hm;
-      out.push({ v: iso, label: d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) + ', ' + hm });
-    }
-    if (out.length >= 12) break;
-  }
-  return out;
-}
 
 on('/check/contact', (n) => {
   const step = Number(n);
-  if (!S.privacyAck || !S.contactConsent || !eligibleToContinue() || !(step >= 1 && step <= CONTACT_STEPS)) { go('/check'); return false; }
+  if (!S.consent || !eligibleToContinue() || !(step >= 1 && step <= CONTACT_STEPS)) { go('/check'); return false; }
   const c = S.contact;
   const back = () => go(step === 1 ? '/check/notice' : '/check/contact/' + (step - 1));
   const nextPath = step === CONTACT_STEPS ? '/check/review' : '/check/contact/' + (step + 1);
@@ -740,77 +665,35 @@ on('/check/contact', (n) => {
       return ok;
     };
   } else if (step === 2) {
-    title = 'How to reach you';
-    const alt = h('input', { id: 'c4', type: 'tel', inputmode: 'tel', autocomplete: 'tel-national', maxlength: '16', class: 'bigfield', value: c.alt || '' });
-    const email = h('input', { id: 'c5', type: 'email', autocomplete: 'email', class: 'bigfield', value: c.email || '' });
-    const msgs = radioGroup('c3', 'c3-label', CONTACT.c3_opts, c.msgOk);
-    body = [h('div', { class: 'field' }, h('p', { class: 'flabel', id: 'c3-label' }, CONTACT.c3), msgs, h('p', { class: 'error', id: 'c3-err', role: 'alert' })),
-      field('c4', CONTACT.c4, alt), field('c5', CONTACT.c5, email)];
-    validate = () => {
-      let ok = true; setErr('c3', ''); setErr('c4', ''); setErr('c5', '');
-      const pick = msgs.querySelector('input:checked');
-      if (!pick) { setErr('c3', UI.choose_answer); msgs.querySelector('input').focus(); ok = false; }
-      const a = normMobile(alt.value);
-      if (a && !MOBILE_OK(a)) { setErr('c4', UI.alt_mobile_error); if (ok) alt.focus(); ok = false; }
-      const em = email.value.trim();
-      if (em && !EMAIL_OK(em)) { setErr('c5', UI.email_error); if (ok) email.focus(); ok = false; }
-      if (ok) { c.msgOk = Number(pick.value); c.alt = a; c.email = em; }
-      return ok;
-    };
-  } else if (step === 3) {
     title = 'Where you live and which hospital';
-    const place = h('input', { id: 'c6', type: 'text', inputmode: 'text', autocomplete: 'postal-code', maxlength: '60', class: 'bigfield', value: c.place || '' });
+    const city = h('input', { id: 'c6', type: 'text', inputmode: 'text', autocomplete: 'address-level2', maxlength: '60', class: 'bigfield', value: c.city || '' });
     const site = h('select', { id: 'c7', class: 'bigfield' }, h('option', { value: '' }, UI.site_choose),
       CONFIG.SITES.map((s) => h('option', { value: s.code, selected: c.site === s.code }, s.name)));
-    body = [field('c6', CONTACT.c6, place, { hint: 'For example 121001' }), field('c7', CONTACT.c7, site)];
+    body = [field('c6', CONTACT.c6, city), field('c7', CONTACT.c7, site)];
     validate = () => {
       let ok = true; setErr('c6', ''); setErr('c7', '');
-      const pv = place.value.trim();
-      const isNum = /^\d+$/.test(pv);
-      if (!pv || (isNum && !(/^\d{6}$/.test(pv) && Number(pv) >= 110001 && Number(pv) <= 855999))) { setErr('c6', UI.pin_error); place.focus(); ok = false; }
+      const cv = city.value.trim();
+      if (!cv) { setErr('c6', UI.city_error); city.focus(); ok = false; }
       if (!site.value) { setErr('c7', UI.select_error); if (ok) site.focus(); ok = false; }
-      if (ok) { c.place = pv; c.site = site.value; }
+      if (ok) { c.city = cv; c.site = site.value; }
       return ok;
     };
-  } else if (step === 4) {
-    title = 'Language and best time to call';
+  } else {
+    title = 'Language, best time to call and appointment';
     const lang = h('select', { id: 'c8', class: 'bigfield' }, h('option', { value: '' }, UI.lang_choose),
       CONTACT.languages.map((l) => h('option', { value: l.v, selected: c.lang === l.v }, l.label)));
-    const times = checkGroup('c9-label', CONTACT.c9_opts, c.times || []);
-    body = [field('c8', CONTACT.c8, lang), h('div', { class: 'field' }, h('p', { class: 'flabel', id: 'c9-label' }, CONTACT.c9), times)];
+    const time = h('select', { id: 'c9', class: 'bigfield' }, h('option', { value: '' }, CONTACT.c9_none),
+      CONTACT.c9_opts.map((o) => h('option', { value: o.v, selected: c.calltime === o.v }, o.label)));
+    const appt = h('input', { type: 'checkbox', id: 'c11', checked: !!c.appt, 'aria-describedby': 'c11-hint' });
+    body = [field('c8', CONTACT.c8, lang), field('c9', CONTACT.c9, time),
+      h('div', { class: 'field' },
+        h('label', { class: 'opt opt-check single' }, appt, h('span', { class: 'mark', 'aria-hidden': 'true' }), h('span', { class: 'txt' }, CONTACT.c11)),
+        h('p', { class: 'hint', id: 'c11-hint' }, CONTACT.c11_hint))];
     validate = () => {
       setErr('c8', '');
       if (!lang.value) { setErr('c8', UI.select_error); lang.focus(); return false; }
-      c.lang = lang.value; c.times = [...times.querySelectorAll('input:checked')].map((i) => Number(i.value));
+      c.lang = lang.value; c.calltime = time.value ? Number(time.value) : ''; c.appt = appt.checked;
       return true;
-    };
-  } else {
-    title = 'How you heard, and a first visit';
-    const heard = radioGroup('c10', 'c10-label', CONTACT.c10_opts, c.heard);
-    const other = h('input', { id: 'c10o', type: 'text', maxlength: '100', class: 'bigfield', value: c.heardOther || '' });
-    const otherWrap = h('div', { class: 'field', hidden: c.heard !== 14 }, h('label', { for: 'c10o', class: 'flabel' }, CONTACT.c10_other), other);
-    heard.addEventListener('change', () => { otherWrap.hidden = heard.querySelector('input:checked').value !== '14'; });
-    const book = radioGroup('c11', 'c11-label', CONTACT.c11_opts, c.bookSlot);
-    const slots = demoSlots();
-    const slotSel = h('select', { id: 'c11s', class: 'bigfield' }, h('option', { value: '' }, UI.slot_label), slots.map((s) => h('option', { value: s.v, selected: c.slot === s.v }, s.label)));
-    const slotWrap = h('div', { class: 'field', hidden: c.bookSlot !== 1 }, h('label', { for: 'c11s', class: 'flabel' }, UI.slot_label), slotSel,
-      CONFIG.DEMO ? h('p', { class: 'hint' }, UI.slot_demo_note) : null, h('p', { class: 'error', id: 'c11s-err', role: 'alert' }));
-    book.addEventListener('change', () => { slotWrap.hidden = book.querySelector('input:checked').value !== '1'; });
-    body = [
-      h('div', { class: 'field' }, h('p', { class: 'flabel', id: 'c10-label' }, CONTACT.c10), heard, h('p', { class: 'error', id: 'c10-err', role: 'alert' })), otherWrap,
-      h('div', { class: 'field' }, h('p', { class: 'flabel', id: 'c11-label' }, CONTACT.c11), book, h('p', { class: 'error', id: 'c11-err', role: 'alert' })), slotWrap];
-    validate = () => {
-      let ok = true; setErr('c10', ''); setErr('c11', ''); setErr('c11s', '');
-      const hp = heard.querySelector('input:checked');
-      if (!hp) { setErr('c10', UI.choose_answer); heard.querySelector('input').focus(); ok = false; }
-      const bp = book.querySelector('input:checked');
-      if (!bp) { setErr('c11', UI.choose_answer); if (ok) book.querySelector('input').focus(); ok = false; }
-      else if (bp.value === '1' && !slotSel.value) { setErr('c11s', UI.select_error); if (ok) slotSel.focus(); ok = false; }
-      if (ok) {
-        c.heard = Number(hp.value); c.heardOther = c.heard === 14 ? other.value.trim() : '';
-        c.bookSlot = Number(bp.value); c.slot = c.bookSlot === 1 ? slotSel.value : ''; c.slotLabel = c.bookSlot === 1 ? slotSel.options[slotSel.selectedIndex].textContent : '';
-      }
-      return ok;
     };
   }
 
@@ -824,17 +707,15 @@ on('/check/contact', (n) => {
   return { title, el };
 });
 
-/* ---- review and submit (C12) ---- */
+/* ---- review and submit ---- */
 on('/check/review', () => {
   const c = S.contact;
   if (S.ref) { go('/check/done'); return false; }
-  if (!S.privacyAck || !S.contactConsent || !eligibleToContinue() || !c.verified || !c.name || !c.mobile || !c.site || !c.lang || c.heard == null || c.msgOk == null) { go('/check'); return false; }
+  if (!S.consent || !eligibleToContinue() || !c.verified || !c.name || !c.mobile || !c.city || !c.site || !c.lang) { go('/check'); return false; }
   const site = CONFIG.SITES.find((s) => s.code === c.site);
   const lang = CONTACT.languages.find((l) => l.v === c.lang);
-  const heard = CONTACT.c10_opts.find((o) => o.v === c.heard);
-  const msgs = CONTACT.c3_opts.find((o) => o.v === c.msgOk);
-  const times = (c.times || []).map((t) => CONTACT.c9_opts.find((o) => o.v === t).label).join(', ') || UI.eoi_summary.none;
-  const row = (k, v, to) => h('div', { class: 'row' }, h('dt', null, k), h('dd', null, v), h('a', { href: '#/check/contact/' + to, 'aria-label': UI.change + ' ' + k }, UI.change));
+  const time = CONTACT.c9_opts.find((o) => o.v === c.calltime);
+  const row = (k, v, to) => h('div', { class: 'row' }, h('dt', null, k), h('dd', null, h('span', { class: 'val' }, v), h('a', { href: '#/check/contact/' + to, 'aria-label': UI.change + ' ' + k }, UI.change)));
   const errBox = h('p', { class: 'error', role: 'alert' });
   const sendBtn = h('button', { type: 'button', class: 'btn btn-primary btn-big' }, UI.send_details);
   sendBtn.addEventListener('click', async () => {
@@ -849,30 +730,29 @@ on('/check/review', () => {
       errBox.textContent = plain(UI.send_failed);
     }
   });
+  const sm = UI.summary;
   const el = h('section', { class: 'page prose' },
     h('h1', null, UI.review_title), h('p', { class: 'lead-p' }, UI.review_intro),
     h('dl', { class: 'summary' },
-      row(UI.eoi_summary.name, c.name, 1), row(UI.eoi_summary.mobile, c.mobile, 1), row(UI.eoi_summary.msgs, msgs.label, 2),
-      row(UI.eoi_summary.alt, c.alt || UI.eoi_summary.none, 2), row(UI.eoi_summary.email, c.email || UI.eoi_summary.none, 2),
-      row(UI.eoi_summary.place, c.place, 3), row(UI.eoi_summary.site, site.name, 3),
-      row(UI.eoi_summary.lang, lang.label, 4), row(UI.eoi_summary.times, times, 4),
-      row(UI.eoi_summary.heard, heard.label + (c.heardOther ? ': ' + c.heardOther : ''), 5),
-      row(UI.eoi_summary.slot, c.bookSlot === 1 ? (c.slotLabel || c.slot) : UI.eoi_summary.later, 5)),
+      row(sm.name, c.name, 1), row(sm.mobile, c.mobile, 1),
+      row(sm.city, c.city, 2), row(sm.site, site.name, 2),
+      row(sm.lang, lang.label, 3), row(sm.time, time ? time.label : sm.none, 3),
+      row(sm.appt, c.appt ? sm.yes : sm.no, 3)),
     h('p', { class: 'hint' }, UI.submit_note), errBox,
-    h('div', { class: 'actions' }, btn(UI.back, { kind: 'secondary', onclick: () => go('/check/contact/5') }), sendBtn),
+    h('div', { class: 'actions' }, btn(UI.back, { kind: 'secondary', onclick: () => go('/check/contact/' + CONTACT_STEPS) }), sendBtn),
     h('p', { class: 'leave' }, h('a', { href: '#/' }, UI.leave_unsent)));
   return { title: UI.review_title, el };
 });
 
-/* ---- confirmation (E7) ---- */
+/* ---- confirmation ---- */
 on('/check/done', () => {
   if (!S.ref) { go('/check'); return false; }
-  const c = S.contact; const m = MESSAGES.E7;
+  const c = S.contact; const m = MESSAGES.done;
   const site = CONFIG.SITES.find((s) => s.code === c.site);
   const el = h('section', { class: 'page prose result' },
     h('h1', null, ...tpl(m.title, { NAME: c.name, REF: S.ref })),
     h('p', null, tpl(m.p1, { HOSPITAL: site.name, SITE_PHONE: site.phone })),
-    h('p', null, h('strong', null, m.next_h + ' '), m.next, c.bookSlot === 1 ? [' ', tpl(m.slot, { SLOT: c.slotLabel || c.slot })] : null),
+    h('p', null, h('strong', null, m.next_h + ' '), m.next, c.appt ? [' ', m.appt] : null),
     h('p', null, h('strong', null, m.changed_h + ' '), tpl(m.changed)),
     h('p', { class: 'callout' }, m.closing),
     CONFIG.DEMO ? h('p', { class: 'hint' }, 'Demonstration: this reference number is not real and nothing was sent.') : null,

@@ -13,8 +13,8 @@ export const CONFIG = {
   /** Back-end endpoint (a server-side proxy to the REDCap EOI project — never put a REDCap API token in this app). */
   API_BASE: null,
 
-  APP_VERSION: '0.1.0',
-  SOURCE_DOCS: 'HRIDAY-CT-OUT-001 and OUT-002, v0.1 (14-Sep-2026), draft for review',
+  APP_VERSION: '0.2.0',
+  SOURCE_DOCS: 'HRIDAY-CTCA decisions fact sheet (16-Oct-2026) for the pre-screening and study text; privacy and consent wording from HRIDAY-CT-OUT-001/002 v0.1 (14-Sep-2026); draft for review',
   PRIVACY_NOTICE_VERSION: '[x.x]',
   PRIVACY_NOTICE_DATE: '[DD-MMM-YYYY]',
 
@@ -42,7 +42,7 @@ export const CONFIG = {
   /** Demonstration one-time code (used only when DEMO is true). */
   DEMO_OTP: '123456',
 
-  /** Active sites (OUT-002 §9.2, codes 01–20). Replace with the real list when sites are activated. */
+  /** Active sites (REDCap ps_site, codes 01–20). Replace with the real list when sites are activated. */
   SITES: Array.from({ length: 20 }, (_, i) => {
     const code = String(i + 1).padStart(2, '0');
     return { code, name: `[Site ${code} — hospital name, city]`, phone: '[site telephone number]' };
@@ -55,7 +55,7 @@ export const UI_LANGUAGES = [
   { code: 'hi', label: 'हिन्दी (Hindi)', live: false },
 ];
 
-/** Languages offered for the study team's calls and written materials (OUT-002 §9.2 codelist). */
+/** Languages offered for the study team's calls (REDCap ps_lang codelist). */
 export const CALL_LANGUAGES = [
   ['en', 'English'], ['hi', 'Hindi'], ['ta', 'Tamil'], ['te', 'Telugu'], ['kn', 'Kannada'], ['ml', 'Malayalam'],
   ['bn', 'Bengali'], ['as', 'Assamese'], ['kha', 'Khasi'], ['ur', 'Urdu'], ['pa', 'Punjabi'], ['99', 'Other'],
