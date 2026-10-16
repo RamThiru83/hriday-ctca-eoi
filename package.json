@@ -1,8 +1,8 @@
 {
   "name": "hriday-ctca-eoi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "HRIDAY-CTCA expression-of-interest and self-screening web app (draft for review)",
+  "description": "HRIDAY-CTCA expression-of-interest and pre-screening web app (draft for review)",
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
