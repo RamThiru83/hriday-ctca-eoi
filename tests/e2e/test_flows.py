@@ -1,4 +1,5 @@
-"""End-to-end flows on a phone-sized viewport: every outcome message, the contact flow, console errors, axe, overflow."""
+"""End-to-end flows on a phone-sized viewport (v0.2.0): the three outcomes, the not-eligible reasons, consent + contact flow,
+console errors, horizontal overflow. Serve the site first (python3 -m http.server 8080) and set BASE if the port differs."""
 import sys, json, re
 from playwright.sync_api import sync_playwright, expect
 from helpers import *
@@ -18,17 +19,19 @@ def has_text(loc, text, msg, timeout=4000):
 def start(page):
     page.goto(BASE + '#/check'); page.get_by_role('link', name='Start').click()
 
-def run_flow(page, name, steps, expect_h1, expect_review=None):
-    """steps: list of (type, value) in screen order. type 'one'/'multi' -> labels to click; 'age' -> text."""
+CH = 'Poster/flyer at a hospital or clinic'
+RF = {1: 'I smoke now', 2: 'High blood pressure', 3: 'High cholesterol', 4: 'Diabetes (high', 5: 'Kidney disease that a doctor', 6: 'Rheumatoid arthritis or lupus', 7: 'A parent, brother, sister or child', 8: 'None of these', 9: 'Not sure'}
+
+def run_flow(page, name, age, hd=None, rf=None, channel=CH):
+    """Answer channel, age, then (if the questionnaire continues) hd and rf. Returns when the result screen is shown."""
     start(page)
-    for kind, val in steps:
-        if kind == 'age': page.locator('#age').fill(str(val))
-        else: pick(page, *([val] if isinstance(val, str) else val))
-        nxt(page)
-    page.wait_for_url(re.compile(r'#/check/result'))
-    page.wait_for_selector('section.result')
-    has_text(page.locator('h1'), expect_h1, f'{name}: headline contains "{expect_h1}"')
-    return page
+    pick(page, channel); nxt(page)
+    page.locator('#age').fill(str(age)); nxt(page)
+    if hd is not None:
+        page.wait_for_selector('label.opt'); pick(page, hd); nxt(page)
+    if rf is not None:
+        page.wait_for_selector('label.opt-check'); pick(page, *[RF[c] for c in rf]); nxt(page)
+    page.wait_for_url(re.compile(r'#/check/result')); page.wait_for_selector('section.result')
 
 with sync_playwright() as p:
     b = p.chromium.launch()
@@ -41,110 +44,161 @@ with sync_playwright() as p:
     # ---------- static pages ----------
     for path, h1 in [('', 'Heart research study'), ('#/about', 'About the study'), ('#/faq', 'Questions and answers'),
                      ('#/privacy', 'Privacy notice'), ('#/help', 'Help and contact'), ('#/check', 'can I take part')]:
-        page.goto(BASE + path)
-        page.wait_for_selector('h1')
+        page.goto(BASE + path); page.wait_for_selector('h1')
         check(h1 in page.locator('h1').first.inner_text(), f'page {path or "/"} renders "{h1}"')
         check(hscroll(page) <= 0, f'page {path or "/"} has no horizontal scroll at 390px')
         page.screenshot(path=f'{SHOTS}/page_{(path or "home").strip("#/").replace("/","_") or "home"}.png', full_page=True)
+    page.goto(BASE); txt = page.locator('main').inner_text()
+    check('Aged 40 or over' in txt and 'no upper age limit' in txt, 'home page: aged 40 or over, no upper limit')
+    check('70' not in txt, 'home page: no 70 anywhere')
+    page.goto(BASE + '#/about'); txt = page.locator('main').inner_text()
+    for must in ['CT coronary angiography scan (CTCA)', 'QRISK3', 'stage 3', 'a man before 55, a woman before 65', '10 mL', '36 to 48 months', 'at least 3 years and up to 4 years', 'does not pay for them', 'A study doctor makes the final decision']:
+        check(must in txt, f'about page contains "{must}"')
+    for bad in ['primary prevention', 'calcium', '4½', '30–54', 'Nit' + 'ya', 'Wad' + 'hwa', 'men aged 40']:
+        check(bad.lower() not in txt.lower(), f'about page does not contain "{bad}"')
+    page.goto(BASE + '#/check'); check('chest pain now' in page.locator('main').inner_text(), 'intro: emergency line present')
 
-    # ---------- E1: potentially eligible ----------
-    ok_tail = [('one','No'),('one','No'),('one','No'),('one','No'),  # Q7a-d
-               ('multi','None of these'),('one','No'),('one','No'),('one','No')]  # Q8, Q9, Q10, Q12
-    man_ok = [('one','A man'),('age',58),('multi','High blood pressure'),('one','I have never smoked'),('one','No'),('one','No')] + ok_tail
-    run_flow(page, 'E1 man 58 HBP', man_ok, 'you may be able to take part')
-    page.screenshot(path=f'{SHOTS}/result_E1.png', full_page=True)
+    # ---------- the questionnaire has exactly 4 questions on the eligible path, in the fact-sheet order ----------
+    start(page)
+    heads = []
+    for ans in [lambda: pick(page, CH), lambda: page.locator('#age').fill('62'), lambda: pick(page, 'No'), lambda: pick(page, RF[2])]:
+        page.wait_for_selector('h1.qtext'); heads.append(page.locator('h1.qtext').inner_text()); ans(); nxt(page)
+    check(['How did you hear' in heads[0], 'How old are you' in heads[1], 'Has a doctor ever told you' in heads[2], 'Do any of these apply' in heads[3]] == [True] * 4,
+          'questions shown: channel, age, known heart disease, risk-factor checklist (4 screens)')
+    check(all(('of 4' in h) for h in heads), 'progress says "of 4" on each screen')
 
-    # ---------- E2 immediate age exit (no health questions) ----------
-    start(page); pick(page,'A woman'); nxt(page); page.locator('#age').fill('47'); nxt(page)
+    # ---------- outcome 1: potentially eligible ----------
+    run_flow(page, 'eligible', 58, 'No', [2])
+    has_text(page.locator('h1'), 'You may be able to take part.', 'outcome 1: headline')
+    check('A study team member will call you to explain the study. A study doctor will make the final decision.' in page.locator('main').inner_text(), 'outcome 1: fact-sheet message')
+    page.screenshot(path=f'{SHOTS}/result_eligible.png', full_page=True)
+
+    # ---------- outcome 1 at age 85 (no upper limit) ----------
+    run_flow(page, 'eligible 85', 85, 'No', [4, 7])
+    has_text(page.locator('h1'), 'You may be able to take part.', 'outcome 1: age 85 is accepted (no upper limit)')
+    run_flow(page, 'eligible 110', 110, 'No', [1])
+    has_text(page.locator('h1'), 'You may be able to take part.', 'outcome 1: age 110 is accepted')
+
+    # ---------- outcome 3: check needed ----------
+    run_flow(page, 'check hd', 62, 'Not sure', [3])
+    has_text(page.locator('h1'), 'A study team member will call to check a few details.', 'outcome 3: Not sure about heart disease')
+    page.screenshot(path=f'{SHOTS}/result_check.png', full_page=True)
+    run_flow(page, 'check rf', 62, 'No', [9])
+    has_text(page.locator('h1'), 'A study team member will call to check a few details.', 'outcome 3: risk factor "Not sure"')
+
+    # ---------- outcome 2: not eligible, three reasons; no contact details collected ----------
+    start(page); pick(page, 'Other'); nxt(page); page.locator('#age').fill('39'); nxt(page)
     page.wait_for_url(re.compile('#/check/result')); page.wait_for_selector('section.result')
-    has_text(page.locator('h1'), 'Thank you for your interest', 'E2: woman 47 sees age message straight after Q2')
-    check('Women become eligible at 50' in page.locator('main').inner_text(), 'E2: women under 50 see the "eligible at 50" line')
-    page.screenshot(path=f'{SHOTS}/result_E2.png', full_page=True)
+    mt = page.locator('main').inner_text()
+    check('aged 40 or over' in mt and 'cannot take part' in mt, 'outcome 2 (age 39): age message, stops straight after the age question')
+    check('doctor' in mt and 'Continue' not in mt, 'outcome 2 (age): doctor reminder, no Continue button')
+    page.screenshot(path=f'{SHOTS}/result_not_eligible_age.png', full_page=True)
 
-    # ---------- E3 symptoms ----------
-    s = [('one','A man'),('age',60),('multi','Diabetes (sugar)'),('one','I have never smoked'),('one','No'),('one','No'),
-         ('one','Yes'),('one','No'),('one','No'),('one','No'),('multi','Heart attack'),('one','No'),('one','No'),('one','No')]
-    run_flow(page, 'E3 symptoms (+known disease)', s, 'Please read this carefully')
-    has_text(page.locator('main'), 'chest pain now', 'E3: emergency instruction present')
-    check('{{' not in page.locator('main').inner_text(), 'E3: no unreplaced template tokens')
-    page.screenshot(path=f'{SHOTS}/result_E3.png', full_page=True)
+    start(page); pick(page, CH); nxt(page); page.locator('#age').fill('50'); nxt(page); pick(page, 'Yes'); nxt(page)
+    page.wait_for_url(re.compile('#/check/result')); page.wait_for_selector('section.result')
+    mt = page.locator('main').inner_text()
+    check('not been told that they have heart disease' in mt and 'doctor' in mt, 'outcome 2 (Yes to heart disease): stops straight after Q3, polite message')
+    check(page.locator('#priv').count() == 0 and 'Continue' not in mt, 'outcome 2 (known disease): no consent / contact route')
+    page.screenshot(path=f'{SHOTS}/result_not_eligible_hd.png', full_page=True)
 
-    # ---------- E4 variants ----------
-    def e4_flow(name, tweaks, want, text):
-        base = {'sex':'A man','age':60,'rf':'High blood pressure','smoke':'I have never smoked','smokeless':'No','fh':'No',
-                'sym':['No','No','No','No'],'cvd':'None of these','prior':'No','contrast':'No','other':'No', 'ckd':None}
-        base.update(tweaks)
-        steps = [('one',base['sex']),('age',base['age']),('multi',base['rf']),('one',base['smoke']),('one',base['smokeless']),('one',base['fh'])]
-        if base['ckd']: steps.append(('one',base['ckd']))
-        steps += [('one',x) for x in base['sym']] + [('multi',base['cvd']),('one',base['prior']),('one',base['contrast']),('one',base['other'])]
-        run_flow(page, name, steps, want)
-        has_text(page.locator('main'), text, name + ': reason text shown')
-    e4_flow('E4 prior test', {'prior':'Yes'}, 'Thank you for your interest', 'CT scan of the heart')
-    e4_flow('E4 contrast allergy', {'contrast':'Yes'}, 'Thank you for your interest', 'serious reaction to such a dye')
-    e4_flow('E4 severe kidney', {'rf':'Kidney disease (reduced kidney function)','ckd':'Yes'}, 'Thank you for your interest', 'severe kidney disease')
-    e4_flow('E4 known disease', {'cvd':'Stroke or mini-stroke (TIA)'}, 'Thank you for your interest', 'heart disease, a stroke')
-    e4_flow('E4 no risk factor', {'rf':'None of these'}, 'Thank you for your interest', 'you do not have any of them')
-    page.screenshot(path=f'{SHOTS}/result_E4.png', full_page=True)
+    run_flow(page, 'no rf', 50, 'No', [8])
+    mt = page.locator('main').inner_text()
+    check('you do not have any of them' in mt and 'doctor' in mt, 'outcome 2 (None of these): no-risk-factor message')
 
-    # ---------- E5 review (kidney Q6 not sure) ----------
-    s = [('one','A man'),('age',62),('multi','Kidney disease (reduced kidney function)'),('one','I have never smoked'),('one','No'),('one','No'),
-         ('one','Not sure'),  # Q6
-         ('one','No'),('one','No'),('one','No'),('one','No'),('multi','None of these'),('one','No'),('one','No'),('one','No')]
-    run_flow(page, 'E5 kidney not sure', s, 'We need a little more information')
-    page.screenshot(path=f'{SHOTS}/result_E5.png', full_page=True)
+    # ---------- direct URL to the contact steps without eligibility is bounced ----------
+    page.goto(BASE + '#/check/notice'); has_text(page.locator('h1'), 'can I take part', 'consent screen cannot be reached without an eligible result')
+    page.goto(BASE + '#/check/contact/1'); has_text(page.locator('h1'), 'can I take part', 'contact screen cannot be reached without an eligible result')
 
-    # ---------- full path: E1 woman -> A1 -> A2 -> notice -> contact -> review -> done ----------
-    s = [('one','A woman'),('age',55),('multi','High blood pressure'),('one','I have never smoked'),('one','No'),('one','No'),
-         ('one','No'),('one','No'),('one','No'),('one','No'),('multi','None of these'),('one','No'),('one','No'),
-         ('one','Not applicable to me'),('one','No')]
-    run_flow(page, 'E1 woman 55', s, 'you may be able to take part')
+    # ---------- option 8 exclusivity in the browser ----------
+    start(page); pick(page, CH); nxt(page); page.locator('#age').fill('50'); nxt(page); pick(page, 'No'); nxt(page)
+    page.wait_for_selector('label.opt-check')
+    pick(page, RF[1], RF[2], RF[9])
+    check(page.locator('input[type=checkbox]:checked').count() == 3, 'checklist: 1, 2 and 9 can be ticked together')
+    pick(page, RF[8])
+    check(page.locator('input[type=checkbox]:checked').count() == 1 and page.locator('label.opt-check', has_text='None of these').locator('input').is_checked(), 'checklist: ticking "None of these" clears the rest')
+    has_text(page.locator('#q-note'), 'cleared', 'checklist: the clearing is announced to screen readers')
+    pick(page, RF[4])
+    check(page.locator('input[type=checkbox]:checked').count() == 1 and page.locator('label.opt-check', has_text='Diabetes').locator('input').is_checked(), 'checklist: ticking another option clears "None of these"')
+    # nothing ticked -> error, no result
+    pick(page, RF[4]); nxt(page)
+    has_text(page.locator('#q-error'), 'Please tick at least one', 'checklist: empty answer is refused')
+
+    # ---------- age validation ----------
+    start(page); pick(page, CH); nxt(page)
+    for bad in ['', 'abc', '17', '111', '45.5']:
+        page.locator('#age').fill(bad); nxt(page)
+        has_text(page.locator('#q-error'), 'between 18 and 110', f'age "{bad}" is refused')
+
+    # ---------- full path: outcome 1 -> consent -> contact -> review -> done ----------
+    run_flow(page, 'full', 55, 'No', [2])
     page.get_by_role('button', name='Continue').click()
-    page.wait_for_url(re.compile('#/check/ack'))
-    # cannot proceed without ticking
-    nxt(page); has_text(page.locator('#ack-error'), 'Please tick', 'A1: error shown when not ticked')
-    page.locator('label.opt').click(); nxt(page)
-    page.wait_for_url(re.compile('contact-ask'))
-    pick(page, 'Yes, please contact me'); nxt(page)
-    page.wait_for_url(re.compile('/check/notice'))
-    nxt(page); has_text(page.locator('#priv-error'), 'Please tick', 'A3: error when privacy box not ticked')
+    page.wait_for_url(re.compile('#/check/notice')); page.wait_for_selector('#priv')
+    mt = page.locator('main').inner_text()
+    check('This is not a medical check-up and does not tell you your heart risk.' in mt, 'consent: disclaimer shown')
+    nxt(page); has_text(page.locator('#priv-error'), 'Please tick', 'consent: error when box not ticked')
     page.locator('details summary').click()
-    check('data fiduciary' in page.locator('details').inner_text(), 'A3: full notice expands inline')
+    check('data fiduciary' in page.locator('details').inner_text(), 'consent: full privacy notice expands inline')
+    page.screenshot(path=f'{SHOTS}/notice.png', full_page=True)
     page.locator('label.opt').click(); nxt(page)
-    page.screenshot(path=f'{SHOTS}/contact1.png', full_page=True)
-    # step 1: name + mobile + otp
+    page.wait_for_selector('#c1')
     page.locator('#c1').fill('Test Person'); page.locator('#c2').fill('9876543210')
-    nxt(page); has_text(page.locator('#c2-err'), 'check your number', 'C2: must verify code before continuing')
+    nxt(page); has_text(page.locator('#c2-err'), 'check your number', 'contact: must verify code before continuing')
     page.get_by_role('button', name='Send me a code').click()
     page.locator('#otp').fill('000000'); page.get_by_role('button', name='Check the code').click()
     has_text(page.locator('#otp-err'), 'does not match', 'OTP: wrong code rejected')
     page.locator('#otp').fill('123456'); page.get_by_role('button', name='Check the code').click()
     has_text(page.locator('main'), 'Number checked', 'OTP: demo code accepted')
     nxt(page)
-    # step 2
-    nxt(page); has_text(page.locator('#c3-err'), 'Please choose', 'C3: required')
-    pick(page, 'SMS only'); page.locator('#c5').fill('bad'); nxt(page)
-    has_text(page.locator('#c5-err'), 'e-mail', 'C5: bad email rejected')
-    page.locator('#c5').fill(''); nxt(page)
-    # step 3
-    page.locator('#c6').fill('12345'); nxt(page); has_text(page.locator('#c6-err'), '6-digit', 'C6: 5-digit PIN rejected')
-    page.locator('#c6').fill('121001'); page.locator('#c7').select_option('03'); nxt(page)
-    # step 4
-    page.locator('#c8').select_option('hi'); pick(page, 'Morning (9–12)', 'Weekends'); nxt(page)
-    # step 5
-    pick(page, 'Leaflet'); pick(page, 'Yes'); page.locator('#c11s').select_option(index=2); nxt(page)
+    page.wait_for_selector('#c6')
+    nxt(page); has_text(page.locator('#c6-err'), 'city or town', 'contact: city required')
+    page.locator('#c6').fill('Faridabad'); page.locator('#c7').select_option('03'); nxt(page)
+    page.wait_for_selector('#c8')
+    nxt(page); has_text(page.locator('#c8-err'), 'Please choose', 'contact: language required')
+    page.locator('#c8').select_option('hi')   # calltime and appointment are optional: leave both empty first
+    check(page.locator('#c9').count() == 1 and page.locator('#c11').count() == 1, 'contact: optional call time and appointment request present')
+    page.locator('#c9').select_option('2'); page.locator('label.opt-check').click(); nxt(page)
     page.wait_for_url(re.compile('/check/review'))
     page.screenshot(path=f'{SHOTS}/review.png', full_page=True)
     txt = page.locator('main').inner_text()
-    check('Test Person' in txt and '9876543210' in txt and '121001' in txt, 'Review screen lists entered details')
+    check('Test Person' in txt and '9876543210' in txt and 'Faridabad' in txt and 'Afternoon' in txt and 'I would like to book one' in txt, 'review screen lists entered details')
+    check('E-mail' not in txt and 'Other number' not in txt, 'review: no e-mail / alternate number fields any more')
     page.get_by_role('button', name='Send my details').click()
     page.wait_for_url(re.compile('/check/done')); page.wait_for_selector('section.result')
-    has_text(page.locator('h1'), 'Thank you, Test Person', 'E7: confirmation uses name')
-    check(re.search(r'HR-\d{6}', page.locator('h1').inner_text()) is not None, 'E7: reference number format HR-nnnnnn')
+    has_text(page.locator('h1'), 'Thank you, Test Person', 'confirmation uses the name')
+    check(re.search(r'HR-\d{6}', page.locator('h1').inner_text()) is not None, 'confirmation: demo reference HR-nnnnnn')
+    check('within 2 working days' in page.locator('main').inner_text(), 'confirmation: call within 2 working days')
     page.screenshot(path=f'{SHOTS}/done.png', full_page=True)
 
+    # ---------- reviewer mode shows REDCap names and the record that would be sent ----------
+    page.evaluate("localStorage.clear()")
+    page.goto(BASE); page.locator('#settings-btn').click()
+    page.locator('#rv-label').locator('xpath=following-sibling::button').click()
+    run_flow(page, 'review mode', 52, 'No', [2, 6])
+    rt = page.locator('aside.review').inner_text()
+    check('ps_outcome = 1' in rt and 'ps_age_ok' in rt and '"ps_rf":[2,6]' in rt.replace(' ', ''), 'reviewer mode: ps_outcome / ps_age_ok / ps_rf shown')
+    page.get_by_role('button', name='Continue').click(); page.locator('label.opt').click(); nxt(page)
+    page.locator('#c1').fill('Rev Test'); page.locator('#c2').fill('9876543211'); page.get_by_role('button', name='Send me a code').click()
+    page.locator('#otp').fill('123456'); page.get_by_role('button', name='Check the code').click(); has_text(page.locator('main'), 'Number checked', 'reviewer flow: number checked'); nxt(page)
+    page.locator('#c6').fill('Delhi'); page.locator('#c7').select_option('01'); nxt(page)
+    page.locator('#c8').select_option('en'); nxt(page); page.get_by_role('button', name='Send my details').click()
+    page.wait_for_selector('aside.review pre')
+    payload = json.loads(page.locator('aside.review pre').inner_text())
+    check(set(payload) >= {'ps_channel','ps_age','ps_age_ok','ps_hd','ps_rf','ps_outcome','ps_name','ps_mobile','ps_city','ps_site','ps_lang','ps_calltime','ps_appt_request'} and all(k.startswith('ps_') for k in payload), 'payload uses ps_* REDCap names only')
+    check(payload['ps_outcome'] == 1 and payload['ps_rf'] == [2, 6] and payload['ps_appt_request'] == 0 and payload['ps_site'] == '01', 'payload values and codes correct')
+
     # ---------- reload mid-flow returns to start (no persistence) ----------
-    page.goto(BASE + '#/check/q/fh'); page.reload(); page.wait_for_selector('h1')
-    has_text(page.locator('h1'), 'can I take part', 'Deep link without answers returns to intro (nothing persisted)')
+    page.goto(BASE + '#/check/q/hd'); page.reload(); page.wait_for_selector('h1')
+    has_text(page.locator('h1'), 'can I take part', 'deep link without answers returns to intro (nothing persisted)')
+
+    # ---------- banners, large text and high contrast still work ----------
+    page.goto(BASE)
+    check(page.locator('#draftbar').is_visible() and 'Draft for review' in page.locator('#draftbar').inner_text() and 'Demonstration' in page.locator('#draftbar').inner_text(), 'DRAFT and DEMO banners visible')
+    page.locator('#settings-btn').click()
+    page.get_by_role('button', name='Extra large').click()
+    check(page.evaluate("document.documentElement.dataset.size") == '2', 'settings: extra large text')
+    page.locator('#hc-label').locator('xpath=following-sibling::button').click()
+    check(page.evaluate("document.documentElement.dataset.contrast") == 'high', 'settings: high contrast')
+    page.evaluate("localStorage.clear()")
 
     check(not errors, 'no console errors: ' + '; '.join(errors)[:300])
     b.close()

@@ -3,8 +3,9 @@ import json, os
 from playwright.sync_api import sync_playwright
 
 BASE = os.environ.get('BASE', 'http://localhost:8080/')
-AXE = os.environ.get('AXE_JS', '/tmp/claude-0/work/axe/node_modules/axe-core/axe.min.js')
-SHOTS = os.environ.get('SHOTS', '/tmp/claude-0/work/shots')
+os.makedirs(os.environ.get('SHOTS', 'shots'), exist_ok=True)
+AXE = os.environ.get('AXE_JS', 'node_modules/axe-core/axe.min.js')
+SHOTS = os.environ.get('SHOTS', 'shots')
 
 def axe_check(page, label):
     page.add_script_tag(path=AXE)

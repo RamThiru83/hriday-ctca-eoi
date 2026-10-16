@@ -8,8 +8,7 @@ with sync_playwright() as p:
         pg=ctx.new_page()
         pg.goto(BASE); pg.evaluate(f"document.documentElement.dataset.size='{size}'")
         pg.screenshot(path=f'{SHOTS}/home_{name}.png')
-        pg.goto(BASE+'#/check/q/sex'); 
-        pg.goto(BASE+'#/check'); pg.get_by_role('link',name='Start').click(); pg.locator('label.opt').nth(1).click()
+                pg.goto(BASE+'#/check'); pg.get_by_role('link',name='Start').click(); pg.locator('label.opt').nth(1).click()
         pg.screenshot(path=f'{SHOTS}/q1_{name}.png')
         ctx.close()
     ctx=b.new_context(viewport={'width':360,'height':780},device_scale_factor=2,is_mobile=True)

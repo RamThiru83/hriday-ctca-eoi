@@ -33,10 +33,9 @@ with sync_playwright() as p:
             rec(f'{contrast}/size{size}/faq-open', axe_check(page, 'faq'))
             page.goto(BASE); page.locator('#settings-btn').click()
             rec(f'{contrast}/size{size}/settings', axe_check(page, 'settings'))
-            # questionnaire screens: walk a woman through everything, axe on each screen
+            # questionnaire screens: walk through every screen of the eligible path, axe on each screen
             page.goto(BASE + '#/check'); page.get_by_role('link', name='Start').click()
-            seq = [('A woman',), None, ('Kidney disease (reduced kidney function)', 'Diabetes (sugar)'), ('Yes, currently',), ('No',), ('Yes',),  # Q1,age,Q3,Q4,Q4a,Q5
-                   ('No',), ('No',), ('No',), ('No',), ('No',), ('None of these',), ('No',), ('No',), ('Not applicable to me',), ('No',)]
+            seq = [('Social media / WhatsApp',), None, ('No',), ('Diabetes (high blood sugar)', 'High cholesterol')]   # channel, age, hd, rf
             i = 0
             for step in seq:
                 page.wait_for_selector('h1')
@@ -45,6 +44,27 @@ with sync_playwright() as p:
                 else: pick(page, *step)
                 page.get_by_role('button', name='Next').click(); i += 1
                 page.wait_for_timeout(120)
+            # result, consent, contact steps, review, confirmation
+            page.wait_for_selector('section.result')
+            rec(f'{contrast}/size{size}/result', axe_check(page, 'result'))
+            page.get_by_role('button', name='Continue').click(); page.wait_for_selector('#priv')
+            rec(f'{contrast}/size{size}/notice', axe_check(page, 'notice'))
+            page.locator('label.opt').click(); page.get_by_role('button', name='Next').click()
+            page.wait_for_selector('#c1'); rec(f'{contrast}/size{size}/contact1', axe_check(page, 'c1'))
+            page.locator('#c1').fill('Test Person'); page.locator('#c2').fill('9876543210')
+            page.get_by_role('button', name='Send me a code').click(); page.locator('#otp').fill('123456')
+            page.get_by_role('button', name='Check the code').click(); page.wait_for_selector('text=Number checked'); page.get_by_role('button', name='Next').click()
+            page.wait_for_selector('#c6'); rec(f'{contrast}/size{size}/contact2', axe_check(page, 'c2'))
+            page.locator('#c6').fill('Faridabad'); page.locator('#c7').select_option('03'); page.get_by_role('button', name='Next').click()
+            page.wait_for_selector('#c8'); rec(f'{contrast}/size{size}/contact3', axe_check(page, 'c3'))
+            page.locator('#c8').select_option('hi'); page.get_by_role('button', name='Next').click()
+            page.wait_for_selector('.summary'); rec(f'{contrast}/size{size}/review', axe_check(page, 'review'))
+            page.get_by_role('button', name='Send my details').click(); page.wait_for_selector('section.result')
+            rec(f'{contrast}/size{size}/done', axe_check(page, 'done'))
+            # not-eligible and check-needed results
+            page.goto(BASE + '#/check'); page.get_by_role('link', name='Start').click()
+            pick(page, 'Other'); page.get_by_role('button', name='Next').click(); page.locator('#age').fill('35'); page.get_by_role('button', name='Next').click()
+            page.wait_for_selector('section.result'); rec(f'{contrast}/size{size}/result-not-eligible', axe_check(page, 'ne'))
             ctx.close()
 
     # ---- touch targets (≥ 44 css px) on key screens at normal size ----
@@ -53,7 +73,7 @@ with sync_playwright() as p:
     js = """() => [...document.querySelectorAll('button, a.btn, .tab, label.opt, input:not([type=checkbox]):not([type=radio]), select, summary, .settings-btn, .brand')]
             .filter(e => e.offsetParent !== null).map(e => { const r = e.getBoundingClientRect(); return {t:(e.textContent||e.id||e.tagName).trim().slice(0,30), w:Math.round(r.width), h:Math.round(r.height)}; })
             .filter(x => x.w < 44 || x.h < 44)"""
-    for v in VIEWS + ['#/check/q/sex']:
+    for v in VIEWS + ['#/check/q/channel']:
         page.goto(BASE + v); page.wait_for_selector('h1')
         for x in page.evaluate(js): small.append((v, x)); print('SMALL TARGET', v, x)
     # ---- keyboard only: Tab to Start, Enter; Space to choose; Enter to proceed ----
