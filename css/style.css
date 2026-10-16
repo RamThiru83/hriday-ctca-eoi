@@ -214,11 +214,12 @@ html[data-contrast="high"] .error { color: #7A0000; }
 .inline-details h3 { margin-top: 1rem; }
 
 .summary { margin: 0 0 1rem; background: var(--card); border: 2px solid var(--line-soft); border-radius: 14px; }
-.summary .row { display: grid; grid-template-columns: 1fr auto; gap: .1rem .8rem; padding: .75rem 1rem; border-bottom: 1px solid var(--line-soft); }
+.summary .row { padding: .75rem 1rem; border-bottom: 1px solid var(--line-soft); }
 .summary .row:last-child { border-bottom: 0; }
-.summary dt { grid-column: 1; color: var(--muted); font-size: .92rem; }
-.summary dd { grid-column: 1; margin: 0; font-weight: 700; word-break: break-word; }
-.summary a { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-weight: 700; padding: .6rem .3rem; }
+.summary dt { color: var(--muted); font-size: .92rem; }
+.summary dd { display: flex; justify-content: space-between; align-items: center; gap: .8rem; margin: 0; font-weight: 700; }
+.summary .val { word-break: break-word; min-width: 0; }
+.summary a { flex: none; font-weight: 700; padding: .6rem .3rem; }
 
 /* ---------------------------------------------------------------- FAQ */
 .faq details { background: var(--card); border: 2px solid var(--line-soft); border-radius: 14px; margin: 0 0 .65rem; }
