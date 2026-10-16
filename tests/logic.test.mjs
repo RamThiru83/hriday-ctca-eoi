@@ -447,8 +447,14 @@ test('the whole repository has no mention of the removed person', () => {
   }
 });
 
-test('the version is 0.2.0 everywhere it is shown', () => {
-  assert.equal(JSON.parse(read('package.json')).version, '0.2.0');
-  assert.match(read('js/config.js'), /APP_VERSION: '0\.2\.0'/);
-  assert.match(read('sw.js'), /hriday-eoi-v0\.2\.0/);
+test('the version is 0.2.1 everywhere it is shown', () => {
+  assert.equal(JSON.parse(read('package.json')).version, '0.2.1');
+  assert.match(read('js/config.js'), /APP_VERSION: '0\.2\.1'/);
+  assert.match(read('sw.js'), /hriday-eoi-v0\.2\.1/);
+});
+
+test('aspirin for a non-cardiovascular reason does not exclude (16-Oct-2026)', () => {
+  const t = read('js/data-study.js');
+  assert.ok(/If you take aspirin for another reason, you can still take part/.test(t));
+  assert.ok(!/aspirin-type tablets for another reason/.test(t));
 });
