@@ -1,242 +1,454 @@
-// Run:  node --test tests/
-// Verifies the eligibility engine against HRIDAY-CT-OUT-002 v0.1 §3.4 (cases 1–18 reproduced verbatim)
-// plus extended cases covering every branch and every on-screen message (E1–E5, all six E4 variants),
-// and an independent re-implementation (REDCap eoi_outcome_calc style) over randomised answer sets.
+// Run:  npm test   (node --test tests/*.test.mjs)
+// Verifies the pre-screening engine (js/logic.js) against the HRIDAY-CTCA decisions fact sheet of 16 Oct 2026,
+// "Common pre-screening question set": ps_channel, ps_age, ps_hd, ps_rf -> ps_outcome (1 potentially eligible,
+// 2 not eligible, 3 coordinator check needed), with fail-closed handling of missing or invalid answers.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, visibleSteps, toggleRf, toggleCvd, ageSexOk, firstUnanswered, OUTCOME, REASON } from '../js/logic.js';
+import { readFileSync } from 'node:fs';
+import {
+  classify, visibleSteps, toggleRf, firstUnanswered, ageOk, ageValid, normaliseRf, riskFactorPresent,
+  OUTCOME, REASON, REVIEW_REASON,
+} from '../js/logic.js';
+import { buildPayload, toRedcapRecord } from '../js/api.js';
+import { QUESTIONS } from '../js/content.js';
 
-const clear = (over = {}) => ({
-  eoi_sex: 1, eoi_age: 50, eoi_rf: [2], eoi_smoke: 4, eoi_smokeless: 0, eoi_fh: 0,
-  eoi_sym_cp: 0, eoi_sym_sob: 0, eoi_sym_syncope: 0, eoi_sym_claud: 0,
-  eoi_cvd: [8], eoi_prior_test: 0, eoi_contrast: 0, eoi_other_study: 0, ...over,
-});
-const M = 1, W = 2, X = 3;
 const E = OUTCOME;
+const R = REASON;
+const RR = REVIEW_REASON;
 
-// [id, answers, outcome, message, e4 key]
-const CASES = [
-  // ---- OUT-002 §3.4 cases 1–18 (verbatim) ----
-  [1, clear({ eoi_sex: M, eoi_age: 45, eoi_rf: [2] }), E.ELIGIBLE, 'E1', null],
-  [2, clear({ eoi_sex: W, eoi_age: 47, eoi_rf: [1], eoi_preg: 0 }), E.NOT_ELIGIBLE, 'E2', null],
-  [3, clear({ eoi_sex: M, eoi_age: 71, eoi_rf: [1] }), E.NOT_ELIGIBLE, 'E2', null],
-  [4, clear({ eoi_sex: W, eoi_age: 55, eoi_rf: [3], eoi_sym_cp: 1, eoi_cvd: [1], eoi_preg: 0 }), E.NOT_ELIGIBLE, 'E3', null],
-  [5, clear({ eoi_sex: M, eoi_age: 60, eoi_rf: [7], eoi_smoke: 1, eoi_prior_test: 1 }), E.NOT_ELIGIBLE, 'E4', 'prior_test'],
-  [6, clear({ eoi_sex: W, eoi_age: 62, eoi_rf: [6], eoi_ckd_severe: 1, eoi_preg: 0 }), E.NOT_ELIGIBLE, 'E4', 'severe_kidney'],
-  [7, clear({ eoi_sex: M, eoi_age: 50, eoi_rf: [7], eoi_smoke: 4, eoi_fh: 0 }), E.NOT_ELIGIBLE, 'E4', 'no_risk_factor'],
-  [8, clear({ eoi_sex: M, eoi_age: 50, eoi_rf: [8], eoi_smoke: 4, eoi_fh: 0 }), E.REVIEW, 'E5', null],
-  [9, clear({ eoi_sex: W, eoi_age: 66, eoi_rf: [4], eoi_sym_sob: 2, eoi_preg: 0 }), E.REVIEW, 'E5', null],
-  [10, clear({ eoi_sex: M, eoi_age: 42, eoi_rf: [7], eoi_smoke: 2 }), E.ELIGIBLE, 'E1', null],
-  [11, clear({ eoi_sex: W, eoi_age: 52, eoi_rf: [7], eoi_fh: 1, eoi_contrast: 2, eoi_preg: 0 }), E.REVIEW, 'E5', null],
-  [12, clear({ eoi_sex: W, eoi_age: 51, eoi_rf: [1], eoi_preg: 1 }), E.NOT_ELIGIBLE, 'E4', 'pregnancy'],
-  [13, clear({ eoi_sex: X, eoi_age: 55, eoi_rf: [2] }), E.REVIEW, 'E5', null],
-  [14, clear({ eoi_sex: M, eoi_age: 70, eoi_rf: [3] }), E.ELIGIBLE, 'E1', null],
-  [15, clear({ eoi_sex: M, eoi_age: 58, eoi_rf: [1], eoi_other_study: 1 }), E.REVIEW, 'E5', null],
-  [16, clear({ eoi_sex: M, eoi_age: 65, eoi_rf: [2], eoi_cvd: [9] }), E.REVIEW, 'E5', null],
-  [17, clear({ eoi_sex: M, eoi_age: 65, eoi_rf: [2], eoi_contrast: 3 }), E.ELIGIBLE, 'E1', null],
-  [18, clear({ eoi_sex: W, eoi_age: 60, eoi_rf: [7], eoi_fh: 1, eoi_preg: 0 }), E.ELIGIBLE, 'E1', null],
+/** A valid, potentially eligible answer set, with overrides. */
+const ok = (over = {}) => ({ ps_channel: 1, ps_age: 55, ps_hd: 0, ps_rf: [2], ...over });
+const out = (a) => classify(a).outcome;
 
-  // ---- Extended: age/sex boundaries ----
-  [19, clear({ eoi_sex: M, eoi_age: 39 }), E.NOT_ELIGIBLE, 'E2', null],
-  [20, clear({ eoi_sex: M, eoi_age: 40 }), E.ELIGIBLE, 'E1', null],
-  [21, clear({ eoi_sex: W, eoi_age: 49, eoi_preg: 0 }), E.NOT_ELIGIBLE, 'E2', null],
-  [22, clear({ eoi_sex: W, eoi_age: 50, eoi_preg: 0 }), E.ELIGIBLE, 'E1', null],
-  [23, clear({ eoi_sex: W, eoi_age: 70, eoi_preg: 3 }), E.ELIGIBLE, 'E1', null],
-  [24, clear({ eoi_sex: W, eoi_age: 71, eoi_preg: 0 }), E.NOT_ELIGIBLE, 'E2', null],
-  [25, clear({ eoi_sex: X, eoi_age: 39 }), E.REVIEW, 'E5', null],   // §9.2: option 3 is not age-gated; physician decides
-  [26, clear({ eoi_sex: X, eoi_age: 71 }), E.REVIEW, 'E5', null],
-  [27, clear({ eoi_sex: X, eoi_age: 45 }), E.REVIEW, 'E5', null],
-  [28, clear({ eoi_sex: W, eoi_age: 40, eoi_preg: 0 }), E.NOT_ELIGIBLE, 'E2', null],
-
-  // ---- Each symptom item, "yes" and "not sure" ----
-  [29, clear({ eoi_sym_cp: 1 }), E.NOT_ELIGIBLE, 'E3', null],
-  [30, clear({ eoi_sym_sob: 1 }), E.NOT_ELIGIBLE, 'E3', null],
-  [31, clear({ eoi_sym_syncope: 1 }), E.NOT_ELIGIBLE, 'E3', null],
-  [32, clear({ eoi_sym_claud: 1 }), E.NOT_ELIGIBLE, 'E3', null],
-  [33, clear({ eoi_sym_cp: 2 }), E.REVIEW, 'E5', null],
-  [34, clear({ eoi_sym_syncope: 2 }), E.REVIEW, 'E5', null],
-  [35, clear({ eoi_sym_claud: 2 }), E.REVIEW, 'E5', null],
-  [36, clear({ eoi_sym_cp: 1, eoi_sym_sob: 2 }), E.NOT_ELIGIBLE, 'E3', null],
-
-  // ---- Known disease (Q8) ----
-  [37, clear({ eoi_cvd: [1] }), E.NOT_ELIGIBLE, 'E4', 'known_disease'],
-  [38, clear({ eoi_cvd: [5, 7] }), E.NOT_ELIGIBLE, 'E4', 'known_disease'],
-  [39, clear({ eoi_cvd: [9] }), E.REVIEW, 'E5', null],
-  [40, clear({ eoi_cvd: [4, 9] }), E.NOT_ELIGIBLE, 'E4', 'known_disease'],
-
-  // ---- Precedence: symptoms > known disease > prior test > kidney > contrast > pregnancy > no risk factor ----
-  [41, clear({ eoi_sym_cp: 1, eoi_prior_test: 1, eoi_contrast: 1 }), E.NOT_ELIGIBLE, 'E3', null],
-  [42, clear({ eoi_cvd: [3], eoi_prior_test: 1, eoi_contrast: 1 }), E.NOT_ELIGIBLE, 'E4', 'known_disease'],
-  [43, clear({ eoi_prior_test: 1, eoi_rf: [6], eoi_ckd_severe: 1, eoi_contrast: 1 }), E.NOT_ELIGIBLE, 'E4', 'prior_test'],
-  [44, clear({ eoi_rf: [6], eoi_ckd_severe: 1, eoi_contrast: 1 }), E.NOT_ELIGIBLE, 'E4', 'severe_kidney'],
-  [45, clear({ eoi_sex: W, eoi_contrast: 1, eoi_preg: 1 }), E.NOT_ELIGIBLE, 'E4', 'contrast'],
-  [46, clear({ eoi_sex: W, eoi_rf: [7], eoi_preg: 1 }), E.NOT_ELIGIBLE, 'E4', 'pregnancy'],
-
-  // ---- Contrast, prior test, other study, kidney ----
-  [47, clear({ eoi_contrast: 1 }), E.NOT_ELIGIBLE, 'E4', 'contrast'],
-  [48, clear({ eoi_prior_test: 2 }), E.REVIEW, 'E5', null],
-  [49, clear({ eoi_other_study: 2 }), E.REVIEW, 'E5', null],
-  [50, clear({ eoi_rf: [6], eoi_ckd_severe: 0 }), E.ELIGIBLE, 'E1', null],
-  [51, clear({ eoi_rf: [6], eoi_ckd_severe: 2 }), E.REVIEW, 'E5', null],
-  [52, clear({ eoi_sex: W, eoi_age: 55, eoi_rf: [6], eoi_ckd_severe: 0, eoi_preg: 3 }), E.ELIGIBLE, 'E1', null],
-
-  // ---- Risk-factor logic ----
-  [53, clear({ eoi_rf: [7], eoi_smoke: 1 }), E.ELIGIBLE, 'E1', null],
-  [54, clear({ eoi_rf: [7], eoi_smoke: 3 }), E.NOT_ELIGIBLE, 'E4', 'no_risk_factor'],
-  [55, clear({ eoi_rf: [7], eoi_smokeless: 1 }), E.NOT_ELIGIBLE, 'E4', 'no_risk_factor'],          // smokeless does not qualify
-  [56, clear({ eoi_rf: [7], eoi_fh: 2 }), E.REVIEW, 'E5', null],
-  [57, clear({ eoi_rf: [8], eoi_smoke: 1 }), E.ELIGIBLE, 'E1', null],                                // don't know + other risk factor
-  [58, clear({ eoi_rf: [1, 8] }), E.ELIGIBLE, 'E1', null],
-  [59, clear({ eoi_rf: [3] }), E.ELIGIBLE, 'E1', null],                                                // statin = risk factor, not exclusion
-  [60, clear({ eoi_rf: [8], eoi_smoke: 3, eoi_fh: 2 }), E.REVIEW, 'E5', null],
-  [61, clear({ eoi_rf: [7], eoi_smoke: 4, eoi_fh: 0, eoi_sym_cp: 2 }), E.NOT_ELIGIBLE, 'E4', 'no_risk_factor'], // §3.1: precedence 7 before review (8)
-  [62, clear({ eoi_rf: [4, 5] }), E.ELIGIBLE, 'E1', null],
-  [63, clear({ eoi_rf: [1], eoi_smoke: 3, eoi_fh: 2 }), E.ELIGIBLE, 'E1', null],                      // "not sure" FH but another risk factor present
-  [64, clear({ eoi_sex: W, eoi_age: 60, eoi_rf: [7], eoi_fh: 1, eoi_preg: 3, eoi_other_study: 0 }), E.ELIGIBLE, 'E1', null],
-];
-
-test('cases 1–18 reproduce OUT-002 §3.4 exactly', () => {
-  assert.equal(CASES.filter((c) => c[0] <= 18).length, 18);
+// ------------------------------------------------------------------ the three outcomes
+test('potentially eligible: age 40+, no known heart disease, at least one of options 1-7', () => {
+  for (const code of [1, 2, 3, 4, 5, 6, 7]) {
+    const r = classify(ok({ ps_rf: [code] }));
+    assert.equal(r.outcome, E.ELIGIBLE, `option ${code}`);
+    assert.deepEqual(r.reasons, []);
+    assert.deepEqual(r.review, []);
+    assert.equal(r.incomplete, false);
+    assert.equal(r.ps_age_ok, 1);
+  }
 });
 
-for (const [id, ans, outcome, message, e4] of CASES) {
-  test(`case ${id}`, () => {
-    const r = classify(ans);
-    assert.equal(r.outcome, outcome, `outcome (got ${r.outcome}, msg ${r.message})`);
-    assert.equal(r.message, message, 'message');
-    assert.equal(r.e4, e4, 'E4 variant');
-  });
+test('potentially eligible with several risk factors, and with 9 (not sure) ticked alongside 1-7', () => {
+  assert.equal(out(ok({ ps_rf: [1, 2, 3, 4, 5, 6, 7] })), E.ELIGIBLE);
+  assert.equal(out(ok({ ps_rf: [2, 9] })), E.ELIGIBLE);
+  assert.equal(out(ok({ ps_rf: [1, 9] })), E.ELIGIBLE);
+});
+
+test('not eligible: aged under 40 (reason 1, age)', () => {
+  const r = classify(ok({ ps_age: 39 }));
+  assert.equal(r.outcome, E.NOT_ELIGIBLE);
+  assert.deepEqual(r.reasons, [R.AGE]);
+  assert.equal(r.ps_age_ok, 0);
+});
+
+test('not eligible: Yes to known heart disease (reason 2)', () => {
+  const r = classify(ok({ ps_hd: 1 }));
+  assert.equal(r.outcome, E.NOT_ELIGIBLE);
+  assert.deepEqual(r.reasons, [R.KNOWN_DISEASE]);
+});
+
+test('not eligible: only "None of these" (reason 3, no risk factor)', () => {
+  const r = classify(ok({ ps_rf: [8] }));
+  assert.equal(r.outcome, E.NOT_ELIGIBLE);
+  assert.deepEqual(r.reasons, [R.NO_RISK_FACTOR]);
+});
+
+test('coordinator check needed: Not sure about heart disease', () => {
+  const r = classify(ok({ ps_hd: 2 }));
+  assert.equal(r.outcome, E.REVIEW);
+  assert.deepEqual(r.review, [RR.HD_NOT_SURE]);
+  assert.equal(r.incomplete, false);
+});
+
+test('coordinator check needed: option 9 (not sure) without any of 1-7', () => {
+  const r = classify(ok({ ps_rf: [9] }));
+  assert.equal(r.outcome, E.REVIEW);
+  assert.deepEqual(r.review, [RR.RF_NOT_SURE]);
+});
+
+test('coordinator check needed: not sure on both questions records both reasons', () => {
+  const r = classify(ok({ ps_hd: 2, ps_rf: [9] }));
+  assert.equal(r.outcome, E.REVIEW);
+  assert.deepEqual(r.review, [RR.HD_NOT_SURE, RR.RF_NOT_SURE]);
+});
+
+test('not sure about heart disease but a risk factor present: still review, not eligible', () => {
+  assert.equal(out(ok({ ps_hd: 2, ps_rf: [4] })), E.REVIEW);
+  assert.equal(out(ok({ ps_hd: 2, ps_rf: [4, 9] })), E.REVIEW);
+});
+
+// ------------------------------------------------------------------ age boundaries
+test('age boundaries: 39 not eligible, 40 eligible, no upper limit up to 110', () => {
+  assert.equal(out(ok({ ps_age: 39 })), E.NOT_ELIGIBLE);
+  assert.equal(out(ok({ ps_age: 40 })), E.ELIGIBLE);
+  assert.equal(out(ok({ ps_age: 41 })), E.ELIGIBLE);
+  assert.equal(out(ok({ ps_age: 70 })), E.ELIGIBLE); // the old upper limit is gone
+  assert.equal(out(ok({ ps_age: 71 })), E.ELIGIBLE);
+  assert.equal(out(ok({ ps_age: 99 })), E.ELIGIBLE);
+  assert.equal(out(ok({ ps_age: 110 })), E.ELIGIBLE);
+});
+
+test('age 18 is the smallest valid entry and is not eligible (under 40)', () => {
+  const r = classify(ok({ ps_age: 18 }));
+  assert.equal(r.outcome, E.NOT_ELIGIBLE);
+  assert.deepEqual(r.reasons, [R.AGE]);
+});
+
+test('ps_age_ok follows the 40-year threshold only', () => {
+  assert.equal(ageOk(39), 0);
+  assert.equal(ageOk(40), 1);
+  assert.equal(ageOk(110), 1);
+  assert.equal(ageOk(18), 0);
+  for (const bad of [undefined, null, '', 'abc', '45', 17, 111, 200, -5, 45.5, NaN, Infinity]) assert.equal(ageOk(bad), null, String(bad));
+});
+
+test('ageValid accepts whole numbers 18-110 only', () => {
+  assert.equal(ageValid(18), true);
+  assert.equal(ageValid(110), true);
+  for (const bad of [17, 111, 0, -1, 45.5, '50', null, undefined, NaN]) assert.equal(ageValid(bad), false, String(bad));
+});
+
+test('age under 40 wins over every other answer (the questionnaire stops after the age question)', () => {
+  assert.deepEqual(classify(ok({ ps_age: 30, ps_hd: 1 })).reasons, [R.AGE]);
+  assert.deepEqual(classify(ok({ ps_age: 30, ps_rf: [8] })).reasons, [R.AGE]);
+  assert.deepEqual(classify({ ps_channel: 1, ps_age: 30 }).reasons, [R.AGE]); // later questions not asked, so not needed
+});
+
+// ------------------------------------------------------------------ fail closed: missing and invalid answers
+test('missing answers never give "potentially eligible" (fail closed to check needed, incomplete)', () => {
+  const cases = [
+    {},
+    { ps_channel: 1 },
+    { ps_channel: 1, ps_age: 55 },
+    { ps_channel: 1, ps_age: 55, ps_hd: 0 },
+    { ps_channel: 1, ps_age: 55, ps_rf: [2] },
+    { ps_channel: 1, ps_hd: 0, ps_rf: [2] },
+    ok({ ps_age: undefined }),
+    ok({ ps_hd: undefined }),
+    ok({ ps_hd: null }),
+    ok({ ps_rf: undefined }),
+    ok({ ps_rf: [] }),
+    ok({ ps_rf: null }),
+  ];
+  for (const c of cases) {
+    const r = classify(c);
+    assert.notEqual(r.outcome, E.ELIGIBLE, JSON.stringify(c));
+    assert.equal(r.outcome, E.REVIEW, JSON.stringify(c));
+    assert.equal(r.incomplete, true, JSON.stringify(c));
+    assert.deepEqual(r.review, [RR.INCOMPLETE]);
+  }
+});
+
+test('classify() with no argument does not throw and does not give "eligible"', () => {
+  assert.equal(classify().outcome, E.REVIEW);
+});
+
+test('invalid values never give "potentially eligible"', () => {
+  const bad = [
+    ok({ ps_age: '55' }), ok({ ps_age: 55.5 }), ok({ ps_age: 111 }), ok({ ps_age: 17 }), ok({ ps_age: NaN }),
+    ok({ ps_hd: 3 }), ok({ ps_hd: '0' }), ok({ ps_hd: -1 }), ok({ ps_hd: true }),
+    ok({ ps_rf: 2 }), ok({ ps_rf: '2' }), ok({ ps_rf: [0] }), ok({ ps_rf: [10] }), ok({ ps_rf: ['2'] }), ok({ ps_rf: [2.5] }),
+    ok({ ps_rf: [2, 8] }), ok({ ps_rf: [8, 9] }), ok({ ps_rf: [1, 8] }),
+  ];
+  for (const c of bad) {
+    const o = classify(c).outcome;
+    assert.notEqual(o, E.ELIGIBLE, JSON.stringify(c));
+  }
+});
+
+test('"None of these" combined with any other option is invalid, not "no risk factor" and not eligible', () => {
+  for (const combo of [[1, 8], [2, 8], [7, 8], [8, 9], [1, 2, 8]]) {
+    const r = classify(ok({ ps_rf: combo }));
+    assert.equal(r.outcome, E.REVIEW, JSON.stringify(combo));
+    assert.equal(r.incomplete, true);
+  }
+});
+
+test('Yes to known heart disease is conclusive even if ps_rf is missing or invalid', () => {
+  assert.equal(out(ok({ ps_hd: 1, ps_rf: undefined })), E.NOT_ELIGIBLE);
+  assert.equal(out(ok({ ps_hd: 1, ps_rf: [] })), E.NOT_ELIGIBLE);
+  assert.equal(out(ok({ ps_hd: 1, ps_rf: [2, 8] })), E.NOT_ELIGIBLE);
+  assert.equal(out({ ps_age: 60, ps_hd: 1 }), E.NOT_ELIGIBLE); // rf is not asked after a Yes
+});
+
+test('Yes to heart disease with "None of these" records both reasons, in order', () => {
+  assert.deepEqual(classify(ok({ ps_hd: 1, ps_rf: [8] })).reasons, [R.KNOWN_DISEASE, R.NO_RISK_FACTOR]);
+});
+
+test('Yes to heart disease wins over a risk factor', () => {
+  assert.equal(out(ok({ ps_hd: 1, ps_rf: [1, 2, 3] })), E.NOT_ELIGIBLE);
+});
+
+test('Not sure about heart disease together with "None of these" is not eligible (no risk factor), not review', () => {
+  const r = classify(ok({ ps_hd: 2, ps_rf: [8] }));
+  assert.equal(r.outcome, E.NOT_ELIGIBLE);
+  assert.deepEqual(r.reasons, [R.NO_RISK_FACTOR]);
+});
+
+// ------------------------------------------------------------------ option 8 exclusivity and checkbox behaviour
+test('toggleRf: ticking "None of these" (8) clears every other option', () => {
+  assert.deepEqual(toggleRf([1, 2, 9], 8), [8]);
+  assert.deepEqual(toggleRf([], 8), [8]);
+});
+
+test('toggleRf: ticking any other option clears "None of these"', () => {
+  for (const code of [1, 2, 3, 4, 5, 6, 7, 9]) assert.deepEqual(toggleRf([8], code), [code], String(code));
+});
+
+test('toggleRf: 9 (not sure) can sit alongside 1-7, result is sorted', () => {
+  assert.deepEqual(toggleRf([4], 9), [4, 9]);
+  assert.deepEqual(toggleRf([9], 2), [2, 9]);
+  assert.deepEqual(toggleRf([7, 1], 3), [1, 3, 7]);
+});
+
+test('toggleRf: unticking removes only that option and does not mutate the input', () => {
+  const cur = [1, 2];
+  assert.deepEqual(toggleRf(cur, 1), [2]);
+  assert.deepEqual(cur, [1, 2]);
+  assert.deepEqual(toggleRf([8], 8), []);
+});
+
+test('toggleRf never produces a combination that classify() treats as invalid', () => {
+  const codes = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  let state = [];
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  for (let i = 0; i < 5000; i++) {
+    state = toggleRf(state, codes[Math.floor(rnd() * codes.length)]);
+    if (state.length) assert.notEqual(normaliseRf(state), null, JSON.stringify(state));
+  }
+});
+
+test('normaliseRf and riskFactorPresent', () => {
+  assert.deepEqual(normaliseRf([3, 1, 3]), [1, 3]);
+  assert.equal(normaliseRf([]), null);
+  assert.equal(normaliseRf([8, 1]), null);
+  assert.equal(riskFactorPresent([8]), false);
+  assert.equal(riskFactorPresent([9]), false);
+  assert.equal(riskFactorPresent([8, 9]), false);
+  assert.equal(riskFactorPresent([9, 4]), true);
+  assert.equal(riskFactorPresent(undefined), false);
+});
+
+// ------------------------------------------------------------------ channel never affects the outcome
+test('ps_channel (any of 1-6, missing or invalid) never changes the outcome, reasons or review reasons', () => {
+  const bases = [
+    ok(), ok({ ps_age: 39 }), ok({ ps_hd: 1 }), ok({ ps_hd: 2 }), ok({ ps_rf: [8] }), ok({ ps_rf: [9] }),
+    ok({ ps_age: undefined }), ok({ ps_rf: [] }), ok({ ps_hd: 2, ps_rf: [9] }),
+  ];
+  for (const base of bases) {
+    const ref = classify({ ...base, ps_channel: 1 });
+    for (const ch of [1, 2, 3, 4, 5, 6, undefined, null, 0, 99, 'x']) {
+      assert.deepEqual(classify({ ...base, ps_channel: ch }), ref, JSON.stringify({ base, ch }));
+    }
+    const noChannel = { ...base }; delete noChannel.ps_channel;
+    assert.deepEqual(classify(noChannel), ref);
+  }
+});
+
+// ------------------------------------------------------------------ question flow
+test('visibleSteps: channel, age, hd, rf for age 40+', () => {
+  assert.deepEqual(visibleSteps({}), ['channel', 'age', 'hd', 'rf']);
+  assert.deepEqual(visibleSteps({ ps_age: 40 }), ['channel', 'age', 'hd', 'rf']);
+  assert.deepEqual(visibleSteps({ ps_age: 110, ps_hd: 0 }), ['channel', 'age', 'hd', 'rf']);
+  assert.deepEqual(visibleSteps({ ps_age: 55, ps_hd: 2 }), ['channel', 'age', 'hd', 'rf']);
+});
+
+test('visibleSteps: ends after age under 40, and after Yes to known heart disease', () => {
+  assert.deepEqual(visibleSteps({ ps_age: 39 }), ['channel', 'age']);
+  assert.deepEqual(visibleSteps({ ps_age: 18 }), ['channel', 'age']);
+  assert.deepEqual(visibleSteps({ ps_age: 60, ps_hd: 1 }), ['channel', 'age', 'hd']);
+});
+
+test('visibleSteps: an invalid age does not end the questionnaire (the age screen validates it)', () => {
+  assert.deepEqual(visibleSteps({ ps_age: 17 }).includes('hd'), true);
+});
+
+test('only the four fact-sheet questions exist, with the REDCap variable names', () => {
+  assert.deepEqual(Object.keys(QUESTIONS), ['channel', 'age', 'hd', 'rf']);
+  assert.deepEqual(Object.values(QUESTIONS).map((q) => q.field), ['ps_channel', 'ps_age', 'ps_hd', 'ps_rf']);
+});
+
+test('ps_channel options are codes 1-6 and ps_rf options are codes 1-9 in the fact-sheet wording', () => {
+  assert.deepEqual(QUESTIONS.channel.options.map((o) => o.v), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(QUESTIONS.channel.options.map((o) => o.label), [
+    'Poster/flyer at a hospital or clinic', 'My doctor referred me', "Workplace, residents' association or community group",
+    'Social media / WhatsApp', 'Diagnostic laboratory', 'Other',
+  ]);
+  assert.deepEqual(QUESTIONS.hd.options.map((o) => [o.v, o.label]), [[1, 'Yes'], [0, 'No'], [2, 'Not sure']]);
+  assert.deepEqual(QUESTIONS.rf.options.map((o) => o.v), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(QUESTIONS.rf.options.map((o) => o.label), [
+    'I smoke now, or I stopped smoking in the last 12 months',
+    'High blood pressure, or I take tablets for blood pressure',
+    'High cholesterol',
+    'Diabetes (high blood sugar)',
+    'Kidney disease that a doctor has called moderate (stage 3)',
+    'Rheumatoid arthritis or lupus (SLE)',
+    'A parent, brother, sister or child had a heart attack, stroke or blocked arteries at a young age (a man before 55, a woman before 65)',
+    'None of these',
+    'Not sure',
+  ]);
+  assert.equal(QUESTIONS.age.text, 'How old are you? (years)');
+  assert.equal(QUESTIONS.channel.text, 'How did you hear about this study?');
+  assert.equal(QUESTIONS.rf.text, 'Do any of these apply to you? Tick all that apply.');
+  assert.equal(QUESTIONS.hd.text, 'Has a doctor ever told you that you have heart disease or blocked arteries? For example: a heart attack, angina, a stent or bypass operation, a stroke or mini-stroke, or blocked arteries in the legs.');
+});
+
+test('firstUnanswered walks the visible questions in order and stops after an early exit', () => {
+  assert.equal(firstUnanswered({}), 'channel');
+  assert.equal(firstUnanswered({ ps_channel: 3 }), 'age');
+  assert.equal(firstUnanswered({ ps_channel: 3, ps_age: 50 }), 'hd');
+  assert.equal(firstUnanswered({ ps_channel: 3, ps_age: 50, ps_hd: 0 }), 'rf');
+  assert.equal(firstUnanswered({ ps_channel: 3, ps_age: 50, ps_hd: 0, ps_rf: [] }), 'rf');
+  assert.equal(firstUnanswered({ ps_channel: 3, ps_age: 50, ps_hd: 0, ps_rf: [2] }), null);
+  assert.equal(firstUnanswered({ ps_channel: 3, ps_age: 39 }), null);
+  assert.equal(firstUnanswered({ ps_channel: 3, ps_age: 50, ps_hd: 1 }), null);
+  assert.equal(firstUnanswered({ ps_age: 39 }), 'channel'); // the channel is still asked first
+});
+
+// ------------------------------------------------------------------ independent oracle over every combination
+// Written from the fact sheet text, separately from js/logic.js: age >= 40 else 2; hd Yes 2; none-only 2; hd No + any of 1-7 -> 1; else 3.
+function oracle(a) {
+  const age = a.ps_age;
+  const ageInt = Number.isInteger(age) && age >= 18 && age <= 110;
+  if (!ageInt) return 3;
+  if (age < 40) return 2;
+  if (a.ps_hd === 1) return 2;
+  const rf = a.ps_rf;
+  if (![0, 2].includes(a.ps_hd)) return 3;
+  if (!Array.isArray(rf) || rf.length === 0) return 3;
+  const s = new Set(rf);
+  if (s.has(8) && s.size > 1) return 3;
+  if (s.size === 1 && s.has(8)) return 2;
+  const any17 = [1, 2, 3, 4, 5, 6, 7].some((c) => s.has(c));
+  if (a.ps_hd === 0 && any17) return 1;
+  return 3;
 }
 
-test('at least 40 cases, every message and every E4 variant covered', () => {
-  assert.ok(CASES.length >= 40);
-  const msgs = new Set(CASES.map((c) => c[3]));
-  ['E1', 'E2', 'E3', 'E4', 'E5'].forEach((m) => assert.ok(msgs.has(m), m));
-  const e4 = new Set(CASES.map((c) => c[4]).filter(Boolean));
-  ['known_disease', 'prior_test', 'severe_kidney', 'contrast', 'pregnancy', 'no_risk_factor'].forEach((k) => assert.ok(e4.has(k), k));
-});
-
-test('all applicable not-eligible reasons are recorded, in precedence order', () => {
-  const r = classify(clear({ eoi_sym_cp: 1, eoi_cvd: [1], eoi_prior_test: 1, eoi_rf: [6], eoi_ckd_severe: 1, eoi_contrast: 1 }));
-  assert.deepEqual(r.reasons, [REASON.SYMPTOMS, REASON.KNOWN_DISEASE, REASON.PRIOR_TEST, REASON.SEVERE_KIDNEY, REASON.CONTRAST]);
-  assert.equal(r.message, 'E3');
-});
-
-test('flags: age 70 and women 40–49', () => {
-  assert.equal(classify(clear({ eoi_age: 70 })).flags.age70, true);
-  assert.equal(classify(clear({ eoi_age: 69 })).flags.age70, false);
-  assert.equal(classify(clear({ eoi_sex: W, eoi_age: 48 })).flags.womanUnder50, true);
-  assert.equal(classify(clear({ eoi_sex: W, eoi_age: 50, eoi_preg: 0 })).flags.womanUnder50, false);
-  assert.equal(classify(clear({ eoi_sex: M, eoi_age: 45 })).flags.womanUnder50, false);
-});
-
-test('exclusive-option rules (Q3 and Q8): 7/8 and 8/9 never combine with conditions or each other (§9.3)', () => {
-  assert.deepEqual(toggleRf([1, 2], 7), [7]);
-  assert.deepEqual(toggleRf([7], 1), [1]);
-  assert.deepEqual(toggleRf([7], 8), [8]);
-  assert.deepEqual(toggleRf([1], 8), [8]);
-  assert.deepEqual(toggleRf([8], 2), [2]);
-  assert.deepEqual(toggleRf([1, 2], 1), [2]);
-  assert.deepEqual(toggleCvd([1, 5], 8), [8]);
-  assert.deepEqual(toggleCvd([8], 3), [3]);
-  assert.deepEqual(toggleCvd([1], 9), [9]);
-  assert.deepEqual(toggleCvd([9], 8), [8]);
-  assert.deepEqual(toggleCvd([9], 4), [4]);
-});
-
-test('FAIL CLOSED: missing/blank answers can never produce "potentially eligible" (audit C1)', () => {
-  const full = clear({ eoi_sex: M, eoi_age: 50 });
-  assert.equal(classify(full).outcome, E.ELIGIBLE);
-  for (const k of ['eoi_sym_cp', 'eoi_sym_sob', 'eoi_sym_syncope', 'eoi_sym_claud', 'eoi_cvd', 'eoi_prior_test', 'eoi_contrast', 'eoi_other_study']) {
-    const a = { ...full }; delete a[k];
-    assert.notEqual(classify(a).outcome, E.ELIGIBLE, 'missing ' + k);
-    const b = { ...full, [k]: null };
-    assert.notEqual(classify(b).outcome, E.ELIGIBLE, 'null ' + k);
+test('classify agrees with an independent fact-sheet oracle on every age x hd x rf-subset combination', () => {
+  let n = 0;
+  const ages = [undefined, 17, 18, 25, 39, 40, 41, 69, 70, 71, 85, 110, 111];
+  const hds = [undefined, 0, 1, 2, 3];
+  for (const age of ages) for (const hd of hds) for (let mask = 0; mask < 512; mask++) {
+    const rf = []; for (let b = 0; b < 9; b++) if (mask & (1 << b)) rf.push(b + 1);
+    for (const channel of [undefined, 4]) {
+      const a = { ps_channel: channel, ps_age: age, ps_hd: hd, ps_rf: rf };
+      assert.equal(classify(a).outcome, oracle(a), JSON.stringify(a));
+      n++;
+    }
   }
-  assert.notEqual(classify({ eoi_sex: M, eoi_age: 45, eoi_rf: [2] }).outcome, E.ELIGIBLE);
-  assert.notEqual(classify({ ...full, eoi_cvd: [] }).outcome, E.ELIGIBLE);
-  assert.notEqual(classify({ ...full, eoi_rf: [6] }).outcome, E.ELIGIBLE, 'kidney ticked, Q6 unanswered');
-  assert.notEqual(classify({ ...full, eoi_sex: W, eoi_age: 55 }).outcome, E.ELIGIBLE, 'woman, Q11 unanswered');
-  assert.equal(classify({ ...full, eoi_sex: W, eoi_age: 55, eoi_preg: 0 }).outcome, E.ELIGIBLE);
+  assert.equal(n, 13 * 5 * 512 * 2);
 });
 
-test('firstUnanswered finds the first missing step and returns null when complete', () => {
-  assert.equal(firstUnanswered({ eoi_sex: M }), 'age');
-  assert.equal(firstUnanswered({ eoi_sex: M, eoi_age: 50, eoi_rf: [2] }), 'smoke');
-  assert.equal(firstUnanswered(clear()), null);
-  assert.equal(firstUnanswered(clear({ eoi_rf: [6] })), 'ckd_severe');
-  assert.equal(firstUnanswered(clear({ eoi_sex: W, eoi_age: 55 })), 'preg');
-  assert.equal(firstUnanswered({ eoi_sex: M, eoi_age: 30 }), null); // questionnaire ends after Q2
-});
-
-test('questionnaire flow: ends after Q2 when age/sex fail; Q6 and pregnancy only when relevant', () => {
-  assert.deepEqual(visibleSteps({ eoi_sex: M, eoi_age: 30 }), ['sex', 'age']);
-  const base = visibleSteps({ eoi_sex: M, eoi_age: 50, eoi_rf: [2] });
-  assert.ok(!base.includes('ckd_severe') && !base.includes('preg'));
-  assert.ok(visibleSteps({ eoi_sex: M, eoi_age: 50, eoi_rf: [6] }).includes('ckd_severe'));
-  assert.ok(visibleSteps({ eoi_sex: W, eoi_age: 55, eoi_rf: [2] }).includes('preg'));
-  assert.ok(!visibleSteps({ eoi_sex: X, eoi_age: 55, eoi_rf: [2] }).includes('preg'), 'Q11 is for women only (§9.2)');
-  assert.equal(visibleSteps({ eoi_sex: M, eoi_age: 50, eoi_rf: [2] }).length, 14);
-});
-
-test('ageSexOk rejects non-integers', () => {
-  assert.equal(ageSexOk(M, 45.5), false);
-  assert.equal(ageSexOk(M, NaN), false);
-  assert.equal(ageSexOk(undefined, 50), false);
-});
-
-// ------------------------------------------------------------------------------------------------
-// Independent cross-check: a second implementation written as nested conditionals in the style of the
-// REDCap calculated field eoi_outcome_calc (returns 1, 2 or 3), compared on 200,000 random answer sets.
-// ------------------------------------------------------------------------------------------------
-function redcapStyle(a) {
-  const ok = (a.eoi_sex === 1 && a.eoi_age >= 40 && a.eoi_age <= 70) ||
-             (a.eoi_sex === 2 && a.eoi_age >= 50 && a.eoi_age <= 70);
-  if (!ok && a.eoi_sex !== 3) return 2;
-  if (a.eoi_sex === 3 && !(a.eoi_age >= 18 && a.eoi_age <= 99)) return 2;
-  const rf = (c) => (a.eoi_rf || []).includes(c);
-  const cv = (c) => (a.eoi_cvd || []).includes(c);
-  const anyRf = rf(1) || rf(2) || rf(3) || rf(4) || rf(5) || rf(6) || a.eoi_smoke <= 2 || a.eoi_fh === 1;
-  const sym1 = a.eoi_sym_cp === 1 || a.eoi_sym_sob === 1 || a.eoi_sym_syncope === 1 || a.eoi_sym_claud === 1;
-  const cvd1 = cv(1) || cv(2) || cv(3) || cv(4) || cv(5) || cv(6) || cv(7);
-  const noRf = rf(7) && !rf(1) && !rf(2) && !rf(3) && !rf(4) && !rf(5) && !rf(6) && !rf(8) &&
-               a.eoi_smoke >= 3 && a.eoi_fh === 0;
-  if (sym1 || cvd1 || a.eoi_prior_test === 1 || a.eoi_ckd_severe === 1 || a.eoi_contrast === 1 || a.eoi_preg === 1 || noRf) return 2;
-  const unsure =
-    a.eoi_sex === 3 ||
-    (!anyRf && (rf(8) || a.eoi_fh === 2)) ||
-    a.eoi_ckd_severe === 2 ||
-    a.eoi_sym_cp === 2 || a.eoi_sym_sob === 2 || a.eoi_sym_syncope === 2 || a.eoi_sym_claud === 2 ||
-    cv(9) || a.eoi_prior_test === 2 || a.eoi_contrast === 2 ||
-    a.eoi_other_study === 1 || a.eoi_other_study === 2;
-  if (unsure) return 3;
-  return anyRf ? 1 : 3;
-}
-
-test('independent REDCap-style recalculation agrees on 200,000 random answer sets', () => {
-  let seed = 20260914;
-  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
-  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
-  const subset = (items, noneCode, unsureCode) => {
-    const r = rnd();
-    if (r < 0.25) return [noneCode];
-    if (r < 0.35 && unsureCode) return [unsureCode];
-    const out = items.filter(() => rnd() < 0.25);
-    return out.length ? out : [items[0]];
-  };
-  for (let i = 0; i < 200000; i++) {
-    const a = {
-      eoi_sex: pick([1, 2, 3]), eoi_age: 30 + Math.floor(rnd() * 50),
-      eoi_rf: subset([1, 2, 3, 4, 5, 6], 7, 8), eoi_smoke: pick([1, 2, 3, 4]), eoi_smokeless: pick([0, 1]),
-      eoi_fh: pick([0, 1, 2]),
-      eoi_sym_cp: pick([0, 0, 0, 1, 2]), eoi_sym_sob: pick([0, 0, 0, 1, 2]), eoi_sym_syncope: pick([0, 0, 0, 1, 2]), eoi_sym_claud: pick([0, 0, 0, 1, 2]),
-      eoi_cvd: subset([1, 2, 3, 4, 5, 6, 7], 8, 9), eoi_prior_test: pick([0, 0, 0, 1, 2]),
-      eoi_contrast: pick([0, 0, 3, 1, 2]), eoi_other_study: pick([0, 0, 0, 1, 2]),
-    };
-    if (a.eoi_rf.includes(6)) a.eoi_ckd_severe = pick([0, 0, 1, 2]);
-    if (a.eoi_sex === 2) a.eoi_preg = pick([0, 0, 1, 3]);
-    const got = classify(a).outcome;
-    const want = redcapStyle(a);
-    assert.equal(got, want, JSON.stringify(a));
+test('"potentially eligible" is returned only when all four conditions hold (exhaustive)', () => {
+  const ages = [undefined, 39, 40, 110, 111];
+  for (const age of ages) for (const hd of [undefined, 0, 1, 2]) for (let mask = 0; mask < 512; mask++) {
+    const rf = []; for (let b = 0; b < 9; b++) if (mask & (1 << b)) rf.push(b + 1);
+    const r = classify({ ps_age: age, ps_hd: hd, ps_rf: rf });
+    if (r.outcome === E.ELIGIBLE) {
+      assert.ok(age >= 40 && age <= 110 && hd === 0 && rf.some((c) => c >= 1 && c <= 7) && !rf.includes(8), JSON.stringify({ age, hd, rf }));
+    }
   }
+});
+
+test('the result always has the documented shape', () => {
+  for (const a of [ok(), ok({ ps_age: 30 }), ok({ ps_hd: 2 }), {}]) {
+    const r = classify(a);
+    assert.deepEqual(Object.keys(r).sort(), ['incomplete', 'outcome', 'ps_age_ok', 'reasons', 'review']);
+    assert.ok([1, 2, 3].includes(r.outcome));
+    assert.ok(Array.isArray(r.reasons) && Array.isArray(r.review));
+    if (r.outcome === E.NOT_ELIGIBLE) assert.ok(r.reasons.length >= 1 && r.reasons.every((x) => [1, 2, 3].includes(x)));
+    if (r.outcome !== E.NOT_ELIGIBLE) assert.deepEqual(r.reasons, []);
+  }
+});
+
+// ------------------------------------------------------------------ payload (REDCap names and codes)
+const contact = { name: 'Test Person', mobile: '9876543210', city: 'Faridabad', site: '03', lang: 'hi', calltime: 2, appt: true };
+
+test('buildPayload uses the REDCap variable names and codes of the fact sheet', () => {
+  const p = buildPayload({ answers: ok({ ps_rf: [2, 4] }), contact, consent: true, campaign: 'PH1' });
+  assert.deepEqual(
+    { ps_channel: p.ps_channel, ps_age: p.ps_age, ps_age_ok: p.ps_age_ok, ps_hd: p.ps_hd, ps_rf: p.ps_rf, ps_outcome: p.ps_outcome },
+    { ps_channel: 1, ps_age: 55, ps_age_ok: 1, ps_hd: 0, ps_rf: [2, 4], ps_outcome: 1 });
+  assert.deepEqual(
+    { n: p.ps_name, m: p.ps_mobile, c: p.ps_city, s: p.ps_site, l: p.ps_lang, t: p.ps_calltime, a: p.ps_appt_request },
+    { n: 'Test Person', m: '9876543210', c: 'Faridabad', s: '03', l: 'hi', t: 2, a: 1 });
+  for (const k of Object.keys(p)) assert.match(k, /^ps_/, k);
+});
+
+test('buildPayload: optional ps_calltime and ps_appt_request may be empty', () => {
+  const p = buildPayload({ answers: ok({ ps_hd: 2 }), contact: { ...contact, calltime: '', appt: false }, consent: true });
+  assert.equal(p.ps_outcome, 3);
+  assert.equal(p.ps_calltime, '');
+  assert.equal(p.ps_appt_request, 0);
+});
+
+test('buildPayload refuses not-eligible, incomplete and unconsented states (nothing is ever built for them)', () => {
+  assert.throws(() => buildPayload({ answers: ok({ ps_age: 39 }), contact, consent: true }));
+  assert.throws(() => buildPayload({ answers: ok({ ps_hd: 1 }), contact, consent: true }));
+  assert.throws(() => buildPayload({ answers: ok({ ps_rf: [8] }), contact, consent: true }));
+  assert.throws(() => buildPayload({ answers: { ps_channel: 1 }, contact, consent: true }));
+  assert.throws(() => buildPayload({ answers: ok(), contact, consent: false }));
+});
+
+test('payload carries no removed fields (no sex, symptoms, prior tests, contrast, pregnancy, tobacco, other study)', () => {
+  const p = buildPayload({ answers: ok(), contact, consent: true });
+  const text = JSON.stringify(Object.keys(p));
+  for (const gone of ['sex', 'sym', 'cvd', 'prior', 'contrast', 'preg', 'smoke', 'other_study', 'ckd', 'eoi_']) assert.ok(!text.includes(gone), gone);
+});
+
+test('toRedcapRecord writes ps_rf as ps_rf___1 .. ps_rf___9 with 1 for ticked and 0 for unticked', () => {
+  const rec = toRedcapRecord(buildPayload({ answers: ok({ ps_rf: [2, 9] }), contact, consent: true }));
+  for (let c = 1; c <= 9; c++) assert.equal(rec['ps_rf___' + c], c === 2 || c === 9 ? 1 : 0, 'ps_rf___' + c);
+  assert.equal(rec.ps_rf, undefined);
+  assert.equal(rec.ps_hd, 0);
+});
+
+// ------------------------------------------------------------------ participant-facing text matches the fact sheet
+// Built from pieces so that the removed name does not appear in the repository, even in this test.
+const REMOVED_PERSON = new RegExp(['Nit' + 'ya', 'Wad' + 'hwa'].join('|'), 'i');
+const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+const TEXT_FILES = ['js/content.js', 'js/data-study.js', 'js/data-faq.js', 'js/data-privacy.js'];
+
+test('participant-facing text has no "men 40-70 / women 50-70", "primary prevention", calcium score, 4.5 years or 30-54 months', () => {
+  for (const f of TEXT_FILES) {
+    const t = read(f);
+    assert.ok(!/primary prevention/i.test(t), f + ': primary prevention');
+    assert.ok(!/calcium|\bCAC\b/i.test(t), f + ': calcium / CAC');
+    assert.ok(!/4½|4\.5 years|four and a half/i.test(t), f + ': 4.5 years');
+    assert.ok(!/30[–-]54|54 months/i.test(t), f + ': 30-54 months');
+    assert.ok(!/40[–-]70|40 to 70|50[–-]70|50 to 70|aged 70|\b70 years\b/i.test(t), f + ': 40-70 / 50-70');
+    assert.ok(!REMOVED_PERSON.test(t), f + ': removed person');
+    assert.ok(!/CCTA/.test(t), f + ': CCTA');
+  }
+});
+
+test('study text states the 36-48 month follow-up, the 10 mL sample and the free / not-paid wording', () => {
+  const all = TEXT_FILES.map(read).join('\n');
+  assert.ok(/at least 3 years and up to 4 years/.test(all));
+  assert.ok(/36 to 48 months/.test(all));
+  assert.ok(/about 2 teaspoons, 10 mL|about 2 teaspoons \(10 mL\)/.test(all));
+  assert.ok(/the study does not pay for them/.test(all));
+  assert.ok(/Study tests, the scan .{0,40}and study visits are free|study tests, the scan \(if allocated\) and study visits are free/i.test(all));
+  assert.ok(/travel costs? .{0,40}reimbursed|Reasonable travel costs for study visits are reimbursed/i.test(all));
+  assert.ok(/aged 40 or over/.test(all));
+  assert.ok(/stage 3/.test(all));
+  assert.ok(/a man before 55, a woman before 65/.test(all));
+  assert.ok(/QRISK3/.test(all) && /CTCA/.test(all));
+});
+
+test('the whole repository has no mention of the removed person', () => {
+  for (const f of [...TEXT_FILES, 'js/app.js', 'js/logic.js', 'js/api.js', 'js/config.js', 'README.md', 'index.html', 'package.json', 'sw.js']) {
+    assert.ok(!REMOVED_PERSON.test(read(f)), f);
+  }
+});
+
+test('the version is 0.2.0 everywhere it is shown', () => {
+  assert.equal(JSON.parse(read('package.json')).version, '0.2.0');
+  assert.match(read('js/config.js'), /APP_VERSION: '0\.2\.0'/);
+  assert.match(read('sw.js'), /hriday-eoi-v0\.2\.0/);
 });
