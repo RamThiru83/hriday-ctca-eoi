@@ -13,7 +13,7 @@ export const CONFIG = {
   /** Back-end endpoint (a server-side proxy to the REDCap EOI project — never put a REDCap API token in this app). */
   API_BASE: null,
 
-  APP_VERSION: '0.2.0',
+  APP_VERSION: '0.2.1',
   SOURCE_DOCS: 'HRIDAY-CTCA decisions fact sheet (16-Oct-2026) for the pre-screening and study text; privacy and consent wording from HRIDAY-CT-OUT-001/002 v0.1 (14-Sep-2026); draft for review',
   PRIVACY_NOTICE_VERSION: '[x.x]',
   PRIVACY_NOTICE_DATE: '[DD-MMM-YYYY]',

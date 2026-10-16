@@ -32,7 +32,7 @@ export const STUDY = {
   "• Already have heart disease, a stroke, or blocked arteries",
   "• Have had a heart CT scan or an angiogram in the last 5 years", // UI
   "• Have severe kidney disease, a serious allergy to CT dye, an overactive thyroid that is not under control, or are pregnant or breastfeeding", // UI
-  "• Need blood-thinning medicines or aspirin-type tablets for another reason, or have been told you cannot take a statin", // UI
+  "• Need blood-thinning medicines, or aspirin-type tablets for a heart or blood-vessel problem, or have been told you cannot take a statin. If you take aspirin for another reason, you can still take part", // UI
   "• Have an irregular heartbeat or a body weight that would stop the scan from giving a clear picture", // UI
   "A study doctor makes the final decision after a check-up." // UI
  ],
